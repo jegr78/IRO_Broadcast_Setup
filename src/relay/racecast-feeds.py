@@ -1931,15 +1931,18 @@ def _parse_preset_column(text, headers):
     return out
 
 
-def team_entry(raw, roster):
-    """One /hud/data team object from an Overlay slot value + the roster. The
-    roster is keyed by the VERBATIM label, so the lookup uses the raw slot value
-    first (the per-car identity); a stripped-name fallback covers a bare slot
-    value against a roster whose number lives in a separate Number column.
-    Displayed 'name' is the stripped form; 'number'/logo come from the roster
-    (Number column precedence already baked in), with the slot's own embedded
-    #NNN as the fallback. 'label' carries the verbatim value (with #NNN) so the
-    panel dropdown can offer/select the exact car — the HUD ignores it."""
+def team_entry(raw, roster, quali=None):
+    """One /hud/data team object from an Overlay slot value + the roster (+ the
+    optional Quali Times map). The roster is keyed by the VERBATIM label, so the
+    lookup uses the raw slot value first (the per-car identity); a stripped-name
+    fallback covers a bare slot value against a roster whose number lives in a
+    separate Number column. Displayed 'name' is the stripped form;
+    'number'/logo come from the roster (Number column precedence already baked
+    in), with the slot's own embedded #NNN as the fallback. 'label' carries the
+    verbatim value (with #NNN) so the panel dropdown can offer/select the exact
+    car — the HUD ignores it. bgColor/textColor are the optional tile colours;
+    qualiLap is looked up by asset_key of the stripped name, so number/spelling
+    variants between the two tabs still match (issue #555)."""
     raw = (raw or "").strip()
     name, embedded = split_team_label(raw)
     info = roster.get(raw) or roster.get(name) or {}
@@ -1947,11 +1950,15 @@ def team_entry(raw, roster):
             "number": info.get("number") or embedded,
             "brandKey": info.get("brandKey", ""),
             "brandName": info.get("brandName", ""),
-            "label": raw}
+            "label": raw,
+            "bgColor": info.get("bgColor", ""),
+            "textColor": info.get("textColor", ""),
+            "qualiLap": (quali or {}).get(asset_key(name), "")}
 
 
-def build_hud_data(overlay, roster):
-    """Combine an Overlay map + roster {team: {number, brandKey, brandName}} into /hud/data."""
+def build_hud_data(overlay, roster, quali=None):
+    """Combine an Overlay map + roster {team: {number, brandKey, brandName,
+    bgColor, textColor}} + the optional Quali Times map into /hud/data."""
     return {
         "stint": overlay.get("stint", ""),
         "streamer": overlay.get("streamer", ""),
@@ -1961,7 +1968,8 @@ def build_hud_data(overlay, roster):
             "country": overlay.get("country", ""),
             "flagKey": asset_key(overlay.get("country", "")),
         },
-        "teams": [team_entry(n, roster) for n in overlay.get("teams", ["", "", ""])],
+        "teams": [team_entry(n, roster, quali)
+                  for n in overlay.get("teams", ["", "", ""])],
         "raceControl": overlay.get("race_control", ""),
         "flag": overlay.get("flag", ""),
     }

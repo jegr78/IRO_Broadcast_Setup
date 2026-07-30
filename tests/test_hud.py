@@ -148,9 +148,11 @@ def t_build_hud_data():
     assert d["round"]["country"] == "GERMANY"
     assert d["round"]["flagKey"] == "germany"
     assert d["teams"][0] == {"name": "OVO eSports", "number": "111", "brandKey": "porsche",
-                             "brandName": "Porsche", "label": "OVO eSports #111"}
+                             "brandName": "Porsche", "label": "OVO eSports #111",
+                             "bgColor": "", "textColor": "", "qualiLap": ""}
     assert d["teams"][2] == {"name": "NWR Motorsport", "number": "224", "brandKey": "ferrari",
-                             "brandName": "Ferrari", "label": "NWR Motorsport #224"}
+                             "brandName": "Ferrari", "label": "NWR Motorsport #224",
+                             "bgColor": "", "textColor": "", "qualiLap": ""}
     assert d["raceControl"] == ""
 
 
@@ -158,7 +160,8 @@ def t_build_hud_data_unknown_brand_blank():
     overlay = m.parse_overlay(",Teams P1,,,Mystery Team #0,,,,,\n")
     d = m.build_hud_data(overlay, {})
     assert d["teams"][0] == {"name": "Mystery Team", "number": "0", "brandKey": "",
-                             "brandName": "", "label": "Mystery Team #0"}
+                             "brandName": "", "label": "Mystery Team #0",
+                             "bgColor": "", "textColor": "", "qualiLap": ""}
 
 
 def t_hudsource_data_uses_builders():
@@ -390,11 +393,13 @@ def t_team_entry_resolves_per_car_by_verbatim_label():
     assert m.team_entry("Scuderia Adriatica Motorsport #14", roster) == {
         "name": "Scuderia Adriatica Motorsport", "number": "14",
         "brandKey": "ferrari", "brandName": "Ferrari",
-        "label": "Scuderia Adriatica Motorsport #14"}
+        "label": "Scuderia Adriatica Motorsport #14",
+        "bgColor": "", "textColor": "", "qualiLap": ""}
     assert m.team_entry("Scuderia Adriatica Motorsport #54", roster) == {
         "name": "Scuderia Adriatica Motorsport", "number": "54",
         "brandKey": "amg", "brandName": "AMG",
-        "label": "Scuderia Adriatica Motorsport #54"}
+        "label": "Scuderia Adriatica Motorsport #54",
+        "bgColor": "", "textColor": "", "qualiLap": ""}
 
 def t_roster_number_column():
     r = m.parse_config_roster(ROSTER_CSV_WITH_NUMBER)
@@ -441,10 +446,13 @@ def t_build_hud_data_team_number_and_strip():
     overlay = {"teams": ["OVO eSports #999", "Unknown #5", ""]}
     d = m.build_hud_data(overlay, roster)
     assert d["teams"][0] == {"name": "OVO eSports", "number": "111", "brandKey": "porsche",
-                             "brandName": "Porsche", "label": "OVO eSports #999"}
+                             "brandName": "Porsche", "label": "OVO eSports #999",
+                             "bgColor": "", "textColor": "", "qualiLap": ""}
     assert d["teams"][1] == {"name": "Unknown", "number": "5", "brandKey": "",
-                             "brandName": "", "label": "Unknown #5"}
-    assert d["teams"][2] == {"name": "", "number": "", "brandKey": "", "brandName": "", "label": ""}
+                             "brandName": "", "label": "Unknown #5",
+                             "bgColor": "", "textColor": "", "qualiLap": ""}
+    assert d["teams"][2] == {"name": "", "number": "", "brandKey": "", "brandName": "", "label": "",
+                             "bgColor": "", "textColor": "", "qualiLap": ""}
 
 
 def t_parse_config_roster_team_name_header():
@@ -694,6 +702,44 @@ def t_parse_config_roster_colors_blank_without_columns():
     r = m.parse_config_roster(CONFIG_CSV)
     assert r["OVO eSports #111"]["bgColor"] == ""
     assert r["OVO eSports #111"]["textColor"] == ""
+
+
+def t_team_entry_joins_colors_and_quali_lap():
+    roster = m.parse_config_roster(CONFIG_CSV_COLORS)
+    quali = m.parse_quali_times("Team,Best Lap\nOVO eSports,1:38.973\n")
+    e = m.team_entry("OVO eSports", roster, quali)
+    assert e == {"name": "OVO eSports", "number": "111", "brandKey": "porsche",
+                 "brandName": "Porsche", "label": "OVO eSports",
+                 "bgColor": "#FFFFFF", "textColor": "#111111",
+                 "qualiLap": "1:38.973"}, e
+
+
+def t_team_entry_quali_lap_matches_across_number_variants():
+    # The slot value carries '#111', the Quali Times row does not (and vice
+    # versa) -> both resolve through asset_key of the stripped name.
+    roster = m.parse_config_roster(CONFIG_CSV)
+    quali = m.parse_quali_times("Team,Best Lap\nOVO eSports,1:38.973\n")
+    assert m.team_entry("OVO eSports #111", roster, quali)["qualiLap"] == "1:38.973"
+    quali2 = m.parse_quali_times("Team,Best Lap\nOVO eSports #111,1:38.973\n")
+    assert m.team_entry("OVO eSports #111", roster, quali2)["qualiLap"] == "1:38.973"
+
+
+def t_team_entry_without_quali_map_is_blank():
+    roster = m.parse_config_roster(CONFIG_CSV)
+    e = m.team_entry("OVO eSports #111", roster)          # no quali argument
+    assert e["qualiLap"] == "" and e["bgColor"] == "" and e["textColor"] == ""
+
+
+def t_build_hud_data_carries_colors_and_quali():
+    overlay = m.parse_overlay(OVERLAY_CSV)
+    roster = m.parse_config_roster(CONFIG_CSV_COLORS)
+    quali = m.parse_quali_times("Team,Best Lap\nOVO eSports,1:38.973\n")
+    d = m.build_hud_data(overlay, roster, quali)
+    # OVERLAY_CSV puts 'OVO eSports #111' in P1; the roster here is keyed bare.
+    assert d["teams"][0]["qualiLap"] == "1:38.973"
+    assert d["teams"][0]["bgColor"] == "#FFFFFF"
+    # a team with no quali row keeps a blank slot (the HUD hides it)
+    assert d["teams"][2]["qualiLap"] == ""
 
 
 if __name__ == "__main__":
