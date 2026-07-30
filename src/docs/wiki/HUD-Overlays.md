@@ -64,6 +64,27 @@ exposes these ids:
 The POV box (frame + name) is shown only while the POV PiP is toggled on (driven by the
 relay's `pov_shown`, via `/hud/data` `povActive`).
 
+## Team colours and qualifying lap
+
+Three more overrides, all optional and driven by Sheet data rather than columns in the
+table above:
+
+| Id / hook | Fed by | Meaning |
+|---|---|---|
+| `#team1-bar` `#team2-bar` `#team3-bar` | — | An empty box behind each tile's logo/number; the base HUD ships it with no background, a profile paints one |
+| `#team1-quali` `#team2-quali` `#team3-quali` | [Quali Times tab](Sheet-Template#quali-times-tab) | The car's qualifying best lap text |
+| `--team-bg` / `--team-fg` | Configuration tab `BG Color` / `Text Color` | Set on **every** slot of a tile (not just `-bar`), so one CSS rule colors the whole tile |
+| `body[data-mode="race"]` / `body[data-mode="qualifying"]` | the relay's live mode | Gate any rule on race vs. qualifying |
+
+```css
+#team1-bar, #team2-bar, #team3-bar { background: var(--team-bg); }
+body[data-mode="qualifying"] #team1-quali { display: none; }
+```
+
+These publish data, not a new control surface — no panel field, no Companion button. The
+colours are static per league/team; the lap times are maintained once between qualifying
+and the race — see [Sheet-Template](Sheet-Template#quali-times-tab).
+
 ## Editing — the visual builder
 
 In the Control Center's **Profile** view, the **Overlay Builder** lays out every HUD slot
