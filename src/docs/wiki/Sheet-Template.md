@@ -194,6 +194,7 @@ single already-mangled cell can be rescued with a leading apostrophe: `'1:38.973
 | `1:38.973` | `1:38.973` |
 | `1:38,973` | `1:38.973` |
 | `0:01:38,973` | `1:38.973` |
+| `1:01:38.973` *(a non-zero hour)* | `1:01:38.973` — passed through unchanged; a >1h lap is nonsense, but showing the cell beats guessing |
 | *(empty, or team not found)* | *(lap slot stays hidden)* |
 
 Sample:
@@ -203,8 +204,17 @@ Team                   | Best Lap
 Tavernello Racing #6   | 1:38.973
 ```
 
-A missing tab, missing header, or unreachable fetch simply leaves the lap slots empty —
-nothing else on the HUD is affected.
+This tab can fail to show a lap in three different ways, and the relay handles each
+differently:
+
+- **The tab was never created** — every lap slot stays empty; nothing was ever fetched.
+- **The tab exists, but the `Team` or `Best Lap` header is gone** (e.g. renamed or
+  deleted) — the whole map is replaced with empty, so every lap slot blanks on the next
+  refresh.
+- **The fetch itself fails** (a transient network blip, or a tab that existed and was
+  removed mid-event) — the **last successfully fetched** lap times keep showing; the
+  relay logs a warning once and keeps retrying, never freezing the rest of the HUD over
+  it.
 
 ---
 

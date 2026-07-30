@@ -476,10 +476,11 @@ reloads); flags/brands resolve from text via `asset_key()`. Flags: `--no-hud`,
 CSS/fonts, passed by the CLI when `profiles/<active>/overlay` exists). The optional
 **Quali Times** tab (`--quali-times-tab`, default `Quali Times`) adds each car's
 qualifying best lap via its own fault-isolated fetch inside `HudSource.refresh` — a
-missing tab or unreachable fetch, the state of every league before #555, empties that map
-without failing the rest of `/hud/data`; the Configuration tab's `BG Color`/`Text Color`
-columns surface as `teams[].bgColor`/`textColor`, and `/hud/data` also carries the relay's
-`mode`. Tests: `tests/test_hud.py`.
+fetch/parse failure keeps the **last-good** lap map (never rolled back to empty), an
+existing tab whose header was renamed/removed replaces the map with empty, and a league
+that never created the tab simply stays empty; the Configuration tab's `BG Color`/`Text
+Color` columns surface as `teams[].bgColor`/`textColor`, and `/hud/data` also carries the
+relay's `mode`. Tests: `tests/test_hud.py`.
 
 The panel's **sheet controls** write back through one Apps Script webhook
 (`RACECAST_SHEET_PUSH_URL`, injected by the CLI from the active profile's

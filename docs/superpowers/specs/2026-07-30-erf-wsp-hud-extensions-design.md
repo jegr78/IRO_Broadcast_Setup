@@ -129,7 +129,10 @@ worse than displaying it. No length or plausibility validation: the tile is a fi
   sits in **its own `try/except`** inside `refresh` (:5118): `refresh` is otherwise
   all-or-nothing, so an unreachable or non-existent `Quali Times` tab — the state of *every*
   existing league — would fail the whole refresh and freeze the entire overlay on last-good
-  data. Failure = empty map, logged once, everything else refreshes normally.
+  data. A fetch/parse failure keeps the **last-good** lap map (never rolled back to
+  empty) and logs once; a tab that exists but has lost its `Team`/`Best Lap` header
+  replaces the map with empty; a tab that was never created simply stays empty. Either
+  way, everything else refreshes normally.
 - Three places that spell the team-entry keys out literally must gain the new keys, or a
   panel team write flashes a colourless, quali-less tile for up to `OVERRIDE_TTL` (30 s):
   `HudSource.EMPTY` (:5085), the `team_overrides` padding (:5182), and **`resolve_team`**
