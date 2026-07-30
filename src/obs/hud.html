@@ -413,6 +413,10 @@
   // colour literal lives in the base HUD. Set via style.setProperty (never string
   // concatenation into CSS text), so a sheet value cannot escape into a new
   // declaration; the relay already rejects implausible colours server-side.
+  // KEEP IN SYNC with the teamN-* slot block in the markup above (the
+  // team1-bar … team1-quali divs, and their team2-/team3- twins): every part
+  // listed here gets --team-bg/--team-fg, and a tile slot missing from this list
+  // silently gets no colours. Add a 7th tile slot -> add its suffix here.
   const TEAM_PARTS = ["bar", "logo", "num", "name", "brand", "quali"];
   function setTeamColors(n, bg, fg) {
     for (const part of TEAM_PARTS) {

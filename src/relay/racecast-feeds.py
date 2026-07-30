@@ -1066,6 +1066,11 @@ DEFAULT_QUALIFYING_TAB = "Qualifying"
 # SEPARATE tab from DEFAULT_QUALIFYING_TAB above, which is the qualifying
 # SCHEDULE (URL/Streamer/Stint) — the two must never share a name.
 DEFAULT_QUALI_TIMES_TAB = "Quali Times"
+# How often the Quali Times tab is re-read, on its OWN thread (quali_poller) and
+# entirely off the HUD refresh path. The laps are entered once between qualifying
+# and the race, so a slow cadence is plenty -- and because nothing on air waits for
+# this fetch, a failing request costs nothing that matters (hence no backoff).
+QUALI_TIMES_POLL_S = 60
 
 # ---------- Network bind resolution (auto dual-bind: localhost + Tailscale) ----
 # OBS always reaches the control/HUD server on 127.0.0.1 (a fixed, machine-
@@ -1725,14 +1730,19 @@ TEAM_BG_COLOR_HEADERS = ("bg color", "bg colour", "background color",
                          "background colour")
 TEAM_TEXT_COLOR_HEADERS = ("text color", "text colour", "fg color", "fg colour")
 
-# A plausible CSS colour token: #rgb/#rgba/#rrggbb/#rrggbbaa, an rgb()/rgba()
-# function, or a bare keyword. Anything else -> "". This is the gate that keeps a
-# sheet cell from smuggling a url() (a resource fetch) into the custom property
-# the HUD sets on its slots — the sheet is admin-managed, but the overlay renders
-# on air and a typo must never turn into a network request.
+# A plausible CSS colour token: #rgb/#rgba/#rrggbb/#rrggbbaa, an
+# rgb()/rgba()/hsl()/hsla() function, or a bare keyword. Anything else -> "". This
+# is the gate that keeps a sheet cell from smuggling a url() (a resource fetch)
+# into the custom property the HUD sets on its slots — the sheet is admin-managed,
+# but the overlay renders on air and a typo must never turn into a network request.
+# Letters are allowed INSIDE the function form so unit/keyword arguments pass
+# (`hsl(120deg 50% 50%)`, `rgb(0 0 0 / 50%)`); that keeps the security property
+# intact because the character class admits no parenthesis, semicolon, colon or
+# quote — so an accepted value can never nest a functional notation like url() nor
+# escape the custom-property value into a second declaration.
 CSS_COLOR_RE = re.compile(
     r"^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})"
-    r"|rgba?\([0-9.,%\s/]+\)"
+    r"|(?:rgb|hsl)a?\([0-9a-z.,%\s/]+\)"
     r"|[a-z]{3,20})$", re.I)
 
 
@@ -1745,8 +1755,11 @@ def sanitize_css_color(v):
 # Quali Times tab (issue #555): Team | Best Lap, one row per car, maintained ONCE
 # between qualifying and the race. Deliberately NOT the 'Qualifying' tab — that
 # name is the qualifying SCHEDULE (DEFAULT_QUALIFYING_TAB).
+# The lap header is deliberately NARROW: a bare "quali"/"lap" alias would happily
+# match an unrelated column (a fallback CSV, a renamed tab) and put plausible-
+# looking garbage on air as a lap time.
 QUALI_TEAM_HEADERS = ("team", "teams", "team name")
-QUALI_LAP_HEADERS = ("best lap", "best-lap", "bestlap", "quali time", "quali", "lap")
+QUALI_LAP_HEADERS = ("best lap", "best-lap", "bestlap", "quali time")
 
 # A best lap a Sheets duration format produced ('0:01:38.973'): the hours group is
 # dropped when zero, so the HUD shows the broadcast form '1:38.973'.
@@ -1768,12 +1781,17 @@ def normalize_quali_lap(v):
 
 
 def parse_quali_times(text):
-    """Quali Times tab CSV -> {asset_key(team): display_lap}. Keyed by the
-    asset_key of the STRIPPED team name (a trailing '#NNN' is peeled first), so
-    'Tavernello Racing #6', 'Tavernello Racing' and 'tavernello racing' all hit the
-    same entry — robust against number/spelling variants. Columns are located by
-    header name; a missing tab, missing header, or either column absent -> {}, so a
-    league without this tab is simply unaffected. First row per team wins."""
+    """Quali Times tab CSV -> {asset_key: display_lap}. Each row registers TWO
+    keys, mirroring the two-step lookup the roster already uses (see
+    parse_config_roster / team_entry): the asset_key of the VERBATIM cell (e.g.
+    'scuderia-adriatica-motorsport-14' — the per-CAR identity) and the asset_key of
+    the STRIPPED team name ('scuderia-adriatica-motorsport' — the whole team). So a
+    sheet that spells out '#14' and '#54' gives each car its own lap, while a sheet
+    that writes only the bare team name still matches every car of that team.
+    Both keys are setdefault'ed, so a generic row can never overwrite a specific
+    one; on an identical key the FIRST row wins. Columns are located by header
+    name; a missing tab, missing header, or either column absent -> {}, so a league
+    without this tab is simply unaffected."""
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         return {}
@@ -1786,10 +1804,14 @@ def parse_quali_times(text):
     for row in rows[1:]:
         if len(row) <= ti or len(row) <= li:
             continue
-        name, _embedded = split_team_label((row[ti] or "").strip())
-        key, lap = asset_key(name), normalize_quali_lap(row[li])
-        if key and lap:
-            out.setdefault(key, lap)
+        raw = (row[ti] or "").strip()
+        name, _embedded = split_team_label(raw)
+        lap = normalize_quali_lap(row[li])
+        if not lap:
+            continue
+        for key in (asset_key(raw), asset_key(name)):
+            if key:
+                out.setdefault(key, lap)
     return out
 
 
@@ -1944,12 +1966,15 @@ def team_entry(raw, roster, quali=None):
     'number'/logo come from the roster (Number column precedence already baked
     in), with the slot's own embedded #NNN as the fallback. 'label' carries the
     verbatim value (with #NNN) so the panel dropdown can offer/select the exact
-    car — the HUD ignores it. bgColor/textColor are the optional tile colours;
-    qualiLap is looked up by asset_key of the stripped name, so number/spelling
-    variants between the two tabs still match (issue #555)."""
+    car — the HUD ignores it. bgColor/textColor are the optional tile colours.
+    qualiLap uses the SAME two-step lookup as the roster: the verbatim label first
+    (so two cars of one team keep their own lap) and the stripped name as the
+    fallback (so a bare Quali Times row matches every car of that team, and
+    number/spelling variants between the two tabs still line up) — issue #555."""
     raw = (raw or "").strip()
     name, embedded = split_team_label(raw)
     info = roster.get(raw) or roster.get(name) or {}
+    quali = quali or {}
     return {"name": name,
             "number": info.get("number") or embedded,
             "brandKey": info.get("brandKey", ""),
@@ -1957,7 +1982,7 @@ def team_entry(raw, roster, quali=None):
             "label": raw,
             "bgColor": info.get("bgColor", ""),
             "textColor": info.get("textColor", ""),
-            "qualiLap": (quali or {}).get(asset_key(name), "")}
+            "qualiLap": quali.get(asset_key(raw)) or quali.get(asset_key(name)) or ""}
 
 
 def build_hud_data(overlay, roster, quali=None):
@@ -5226,27 +5251,49 @@ class HudSource:
         except (OSError, ValueError):
             self._data = None
 
-    def refresh(self, timeout=10):
-        # The Quali Times tab (issue #555) is OPTIONAL and fetched on its own:
-        # refresh() is otherwise all-or-nothing, so a league that never created
-        # the tab would fail every refresh and freeze the whole overlay on
-        # last-good data. Failure here = keep the last-good map (re-read fresh
-        # under the lock at commit time below -- NOT the value read here --
-        # so a concurrent refresh()'s newer commit is never rolled back), and
-        # log once; a success resets the gate so a later, DIFFERENT failure
-        # (e.g. a parse error after a sheet-format change) still warns.
-        quali, quali_ok = None, False
-        if self.quali_url:
-            try:
-                quali = parse_quali_times(self._fetch(self.quali_url, timeout))
-                quali_ok = True
-                self._quali_warned = False
-            except Exception as e:
-                if not self._quali_warned:
-                    LOG.warning("quali times unavailable (%s: %s) — tile lap "
-                                "times stay blank", type(e).__name__, e)
-                    self._quali_warned = True
+    def refresh_quali(self, timeout=10):
+        """Fetch + parse the OPTIONAL Quali Times tab (issue #555) and commit the
+        map. Deliberately NOT part of refresh(): quali times are entered once
+        between qualifying and the race, so they need none of the HUD's 5 s
+        freshness — and keeping the fetch out of refresh() is what guarantees that
+        no quali-tab state (missing, present, or unreachable) can ever add a round
+        trip to an on-air HUD refresh or to the synchronous panel-push confirm that
+        clears an optimistic override. Its own slow thread calls this (see
+        quali_poller / QUALI_TIMES_POLL_S), plus once at boot.
+
+        Returns True on a successful fetch+parse, False on failure or when no tab
+        is configured. Never raises. A failure keeps the LAST-GOOD map (never
+        rolled back to empty) and warns once per relay run; a success resets that
+        gate, so a later, DIFFERENT failure (e.g. a parse error after a sheet-format
+        change) still warns."""
+        if not self.quali_url:
+            return False
         try:
+            quali = parse_quali_times(self._fetch(self.quali_url, timeout))
+        except Exception as e:
+            if not self._quali_warned:
+                LOG.warning("quali times unavailable (%s: %s) — keeping the last "
+                            "known lap times", type(e).__name__, e)
+                self._quali_warned = True
+            return False
+        with self.lock:
+            self._quali = quali
+            self._quali_warned = False
+        return True
+
+    def refresh(self, timeout=10):
+        # No quali-tab work happens here -- not a fetch, not a parse (issue #555):
+        # this method runs every --hud-poll seconds AND synchronously after every
+        # panel write, so nothing optional may sit on it. It only READS the
+        # last-good map that refresh_quali() commits.
+        #
+        # Total by construction: the poll thread calls refresh() bare, so an
+        # escaping exception would freeze the on-air overlay on last-good data for
+        # the rest of the relay run. Every parse/build step therefore stays inside
+        # the guarded try; a failure sets last_error and returns False.
+        try:
+            with self.lock:
+                quali = self._quali          # last-good; committed by refresh_quali
             overlay = parse_overlay(self._fetch(self.overlay_url, timeout))
             config_text = self._fetch(self.config_url, timeout)
             roster = parse_config_roster(config_text)
@@ -5254,15 +5301,14 @@ class HudSource:
             vocab = parse_config_vocab(config_text)
             cue_presets = parse_cue_presets(config_text)
             rc_note_presets = parse_rc_note_presets(config_text)
+            data = build_hud_data(overlay, roster, quali)
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             return False
         with self.lock:
-            if not quali_ok:
-                quali = self._quali   # last-good, re-read fresh under the lock
-            data = build_hud_data(overlay, roster, quali)
             self._data = data
-            self._quali = quali
+            # NB: self._quali is NOT written here -- refresh_quali() owns it, so a
+            # commit from its thread is never rolled back by an in-flight refresh.
             self._vocab = vocab
             self._cue_presets = cue_presets
             self._rc_note_presets = rc_note_presets
@@ -9431,8 +9477,29 @@ def make_handler(relay, panel_path=None, hud_source=None, hud_path=None, assets_
 
 
 def poller(source, interval, stop_evt):
+    # Guarded: refresh() is written to be total, but if one ever escaped, an
+    # unguarded loop would die and leave the source frozen on last-good data for
+    # the rest of the relay run -- silently, which is the expensive part (a frozen
+    # on-air overlay with nothing in the log). Log it and keep polling instead.
     while not stop_evt.wait(interval):
-        source.refresh()
+        try:
+            source.refresh()
+        except Exception as e:
+            LOG.warning("sheet poll raised (%s: %s) — continuing",
+                        type(e).__name__, e)
+
+
+def quali_poller(hud_source, interval, stop_evt):
+    """Re-read the optional Quali Times tab on its own SLOW cadence, off the HUD
+    refresh path entirely (issue #555): no quali-tab state may delay an on-air HUD
+    refresh or a panel-push confirm. refresh_quali() never raises; the guard is
+    there so a future change cannot kill this thread unnoticed."""
+    while not stop_evt.wait(interval):
+        try:
+            hud_source.refresh_quali()
+        except Exception as e:
+            LOG.warning("quali times poll raised (%s: %s) — continuing",
+                        type(e).__name__, e)
 
 
 # ---------- GT7 UDP telemetry listener (solo/POV only, #324) ----------------
@@ -9896,6 +9963,14 @@ def main():
         hud_cache = os.path.join(runtime, "hud.cache.json")
         hud_source = HudSource(overlay_url, config_url, hud_cache,
                                quali_url=quali_url)
+        # The optional Quali Times tab (issue #555) is read ONCE here and then only
+        # by its own slow thread (quali_poller, below) -- never on the HUD refresh
+        # path. Non-fatal, like the POV/crew boot reads: an absent or unreachable
+        # tab just leaves the lap slots blank. It runs BEFORE the first refresh()
+        # so the very FIRST built HUD frame already carries the laps -- refresh()
+        # reads the committed map, and doing it in this order needs no second
+        # lap-join site to achieve that.
+        hud_source.refresh_quali()
         hud_source.refresh()   # non-fatal: keeps last-good / empty if unreachable
         for cand in (os.path.join(here, "hud.html"),
                      os.path.join(here, "..", "hud.html"),
@@ -10016,6 +10091,13 @@ def main():
                          daemon=True).start()
     if hud_source:
         threading.Thread(target=poller, args=(hud_source, args.hud_poll, stop_evt),
+                         daemon=True).start()
+    if hud_source and hud_source.quali_url:
+        # Quali Times on its own slow thread (issue #555): entered once between
+        # qualifying and the race, so QUALI_TIMES_POLL_S — never args.hud_poll, and
+        # never inline in the HUD refresh, which must stay free of it.
+        threading.Thread(target=quali_poller,
+                         args=(hud_source, QUALI_TIMES_POLL_S, stop_evt),
                          daemon=True).start()
     if timer_store and timer_store.csv_url:
         threading.Thread(target=poller, args=(timer_store, args.hud_poll, stop_evt),

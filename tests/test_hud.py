@@ -621,6 +621,15 @@ def t_sanitize_css_color_accepts_plausible_values():
     assert m.sanitize_css_color("white") == "white"
 
 
+def t_sanitize_css_color_accepts_hsl():
+    # The docs promise "any plain CSS colour", so the hsl()/hsla() family must pass
+    # too — including the modern space-separated form and an angle unit on the hue.
+    assert m.sanitize_css_color("hsl(0,0%,0%)") == "hsl(0,0%,0%)"
+    assert m.sanitize_css_color(" hsl(210 90% 45%) ") == "hsl(210 90% 45%)"
+    assert m.sanitize_css_color("hsl(120deg 50% 50%)") == "hsl(120deg 50% 50%)"
+    assert m.sanitize_css_color("hsla(0, 0%, 0%, .5)") == "hsla(0, 0%, 0%, .5)"
+
+
 def t_sanitize_css_color_rejects_everything_else():
     # The gate that keeps a sheet cell from smuggling a resource fetch into the
     # custom property the HUD sets on its slots.
@@ -630,6 +639,13 @@ def t_sanitize_css_color_rejects_everything_else():
     assert m.sanitize_css_color("#12345") == ""       # not 3/4/6/8 hex digits
     assert m.sanitize_css_color("") == ""
     assert m.sanitize_css_color(None) == ""
+    # An hsl-SHAPED value may not smuggle anything either: no second declaration,
+    # no nested function, no url(). Widening the regex to hsl() must not widen the
+    # security property.
+    assert m.sanitize_css_color("hsl(0,0%,0%); background: url(http://x)") == ""
+    assert m.sanitize_css_color("hsl(0,0%,0%) url(http://x)") == ""
+    assert m.sanitize_css_color("hsl(var(--x))") == ""
+    assert m.sanitize_css_color('hsl(0,0%,0%)"') == ""
 
 
 def t_normalize_quali_lap_verbatim_and_fixes():
@@ -656,10 +672,15 @@ QUALI_CSV = (
 )
 
 
-def t_parse_quali_times_keys_by_asset_key_of_stripped_name():
+def t_parse_quali_times_keys_by_verbatim_and_stripped_name():
+    # TWO keys per row: the verbatim cell (the per-car identity, mirroring the
+    # roster) AND the stripped team name (so a sheet that writes only the bare
+    # name still matches every car of that team).
     q = m.parse_quali_times(QUALI_CSV)
-    assert q == {"tavernello-racing": "1:38.973",
+    assert q == {"tavernello-racing-6": "1:38.973",
+                 "tavernello-racing": "1:38.973",
                  "n3xus-racing": "1:39.104",
+                 "trrack-design-racing-51": "1:40.512",
                  "trrack-design-racing": "1:40.512"}, q
 
 
@@ -673,9 +694,53 @@ def t_parse_quali_times_tolerates_missing_pieces():
     assert m.parse_quali_times(CONFIG_CSV) == {}
 
 
-def t_parse_quali_times_first_row_per_team_wins():
-    q = m.parse_quali_times("Team,Best Lap\nA Team #1,1:38.000\nA Team #2,1:39.000\n")
-    assert q == {"a-team": "1:38.000"}, q
+def t_quali_lap_headers_are_narrow():
+    # A bare 'Quali'/'Lap' column header is broad enough to match an unrelated
+    # column and turn plausible-looking garbage into an on-air lap time, so only
+    # the explicit 'Best Lap' spellings (+ 'Quali Time') are accepted.
+    assert "quali" not in m.QUALI_LAP_HEADERS
+    assert "lap" not in m.QUALI_LAP_HEADERS
+    assert "best lap" in m.QUALI_LAP_HEADERS
+    assert m.parse_quali_times("Team,Lap\nA Team,1:38.000\n") == {}
+    assert m.parse_quali_times("Team,Quali\nA Team,1:38.000\n") == {}
+    assert m.parse_quali_times("Team,Quali Time\nA Team,1:38.000\n") == {
+        "a-team": "1:38.000"}
+
+
+def t_parse_quali_times_two_cars_of_one_team_keep_their_own_lap():
+    # A team fielding two cars is TWO entries (like the roster, which keys by the
+    # verbatim label for exactly this reason) — the stripped name is not a unique
+    # identity, so neither car may inherit the other's lap.
+    q = m.parse_quali_times("Team,Best Lap\nA Team #14,1:38.100\nA Team #54,1:39.900\n")
+    assert q["a-team-14"] == "1:38.100", q
+    assert q["a-team-54"] == "1:39.900", q
+    assert m.team_entry("A Team #14", {}, q)["qualiLap"] == "1:38.100"
+    assert m.team_entry("A Team #54", {}, q)["qualiLap"] == "1:39.900"
+
+
+def t_parse_quali_times_bare_row_still_matches_every_car():
+    # Today's behaviour is preserved: a sheet that writes only the bare team name
+    # matches whichever car of that team is on the podium.
+    q = m.parse_quali_times("Team,Best Lap\nA Team,1:38.000\n")
+    assert m.team_entry("A Team", {}, q)["qualiLap"] == "1:38.000"
+    assert m.team_entry("A Team #14", {}, q)["qualiLap"] == "1:38.000"
+    assert m.team_entry("A Team #54", {}, q)["qualiLap"] == "1:38.000"
+
+
+def t_parse_quali_times_duplicate_row_first_wins():
+    # The genuine duplicate case: the SAME car twice -> the first row wins.
+    q = m.parse_quali_times("Team,Best Lap\nA Team #14,1:38.100\nA Team #14,1:40.000\n")
+    assert m.team_entry("A Team #14", {}, q)["qualiLap"] == "1:38.100", q
+
+
+def t_parse_quali_times_generic_row_never_shadows_a_specific_one():
+    # A bare team row next to a per-car row, in BOTH sheet orders: the per-car row
+    # always wins for that car (the lookup tries the verbatim key first, and each
+    # key is setdefault'ed so a later generic row cannot overwrite a specific one).
+    for text in ("Team,Best Lap\nA Team,1:38.000\nA Team #54,1:39.900\n",
+                 "Team,Best Lap\nA Team #54,1:39.900\nA Team,1:38.000\n"):
+        q = m.parse_quali_times(text)
+        assert m.team_entry("A Team #54", {}, q)["qualiLap"] == "1:39.900", text
 
 
 CONFIG_CSV_COLORS = (
@@ -746,12 +811,16 @@ def t_build_hud_data_carries_colors_and_quali():
 
 def _quali_hud(quali_text=None, quali_boom=False):
     """A HudSource with all three tabs stubbed. quali_boom simulates the tab not
-    existing (gviz raises), the state of every league that never created it."""
+    existing (gviz raises), the state of a league that never created it. Every
+    fetched URL is recorded on hs.seen, so a test can assert WHICH tabs a given
+    call touched."""
     import tempfile, os as _os
     d = tempfile.mkdtemp()
     hs = m.HudSource("http://overlay", "http://config",
                      _os.path.join(d, "hud.cache.json"), quali_url="http://quali")
+    hs.seen = []
     def fetch(url, timeout=10):
+        hs.seen.append(url)
         if url == "http://overlay":
             return OVERLAY_CSV
         if url == "http://quali":
@@ -763,25 +832,75 @@ def _quali_hud(quali_text=None, quali_boom=False):
     return hs
 
 
+def _muted(fn):
+    """Run fn() with the relay logger's warning muted: a test that deliberately
+    provokes the quali-fetch warning must not pollute the suite output."""
+    orig = m.LOG.warning
+    m.LOG.warning = lambda *a, **k: None
+    try:
+        return fn()
+    finally:
+        m.LOG.warning = orig
+
+
 def t_hudsource_reads_quali_times():
     hs = _quali_hud("Team,Best Lap\nOVO eSports,1:38.973\n")
-    assert hs.refresh() is True
+    assert hs.refresh_quali() is True
     assert hs.quali_times() == {"ovo-esports": "1:38.973"}
+    assert hs.refresh() is True
     assert hs.data()["teams"][0]["qualiLap"] == "1:38.973"
 
 
-def t_hudsource_refresh_survives_missing_quali_tab():
-    # THE regression this task guards: a league without the tab must still get a
-    # fully refreshed HUD, not a frozen last-good frame.
+def t_hudsource_refresh_fetches_exactly_overlay_and_config():
+    # THE on-air performance guarantee: no quali-tab state — missing, present or
+    # unreachable — may add a round trip to the 5 s HUD refresh or to the
+    # synchronous panel-push confirm. refresh() touches TWO tabs, always.
+    hs = _quali_hud("Team,Best Lap\nOVO eSports,1:38.973\n")   # tab exists + works
+    assert hs.refresh() is True
+    assert hs.seen == ["http://overlay", "http://config"], hs.seen
+    hs.seen.clear()
+    assert hs.refresh() is True                                # steady state
+    assert hs.seen == ["http://overlay", "http://config"], hs.seen
+
+    import tempfile, os as _os
+    d = tempfile.mkdtemp()
+    plain = m.HudSource("http://overlay", "http://config",
+                        _os.path.join(d, "hud.cache.json"))    # no quali_url at all
+    seen = []
+    def fetch(url, timeout=10):
+        seen.append(url)
+        return OVERLAY_CSV if url == "http://overlay" else CONFIG_CSV
+    plain._fetch = fetch
+    assert plain.refresh() is True
+    assert seen == ["http://overlay", "http://config"], seen
+
+
+def t_hudsource_refresh_unaffected_by_an_unreachable_quali_tab():
+    # A league without the tab: refresh() never touches it (so it cannot fail or
+    # stall on it), and refresh_quali() reports the failure without raising.
     hs = _quali_hud(quali_boom=True)
-    assert hs.refresh() is True, "a failing quali fetch must not fail the refresh"
+    assert hs.refresh() is True
+    assert hs.seen == ["http://overlay", "http://config"], hs.seen
     assert hs.data()["streamer"] == "JeGr"
     assert hs.data()["teams"][0]["qualiLap"] == ""
+    assert _muted(hs.refresh_quali) is False
     assert hs.quali_times() == {}
+
+
+def t_hudsource_refresh_quali_is_a_noop_without_a_url():
+    import tempfile, os as _os
+    d = tempfile.mkdtemp()
+    hs = m.HudSource("http://overlay", "http://config",
+                     _os.path.join(d, "hud.cache.json"))     # no quali_url
+    seen = []
+    hs._fetch = lambda url, timeout=10: seen.append(url) or ""
+    assert hs.refresh_quali() is False
+    assert seen == [], seen
 
 
 def t_hudsource_quali_times_preserved_on_overlay_failure():
     hs = _quali_hud("Team,Best Lap\nOVO eSports,1:38.973\n")
+    assert hs.refresh_quali() is True
     assert hs.refresh() is True
     def boom(url, timeout=10):
         raise RuntimeError("sheet down")
@@ -790,18 +909,29 @@ def t_hudsource_quali_times_preserved_on_overlay_failure():
     assert hs.quali_times() == {"ovo-esports": "1:38.973"}   # last-good kept
 
 
-def t_hudsource_no_quali_url_makes_no_third_fetch():
-    import tempfile, os as _os
-    d = tempfile.mkdtemp()
-    hs = m.HudSource("http://overlay", "http://config",
-                     _os.path.join(d, "hud.cache.json"))     # no quali_url
-    seen = []
-    def fetch(url, timeout=10):
-        seen.append(url)
-        return OVERLAY_CSV if url == "http://overlay" else CONFIG_CSV
-    hs._fetch = fetch
-    assert hs.refresh() is True
-    assert seen == ["http://overlay", "http://config"], seen
+def t_hudsource_quali_times_preserved_on_quali_failure():
+    # A transient quali fetch failure keeps the last-good map — it is NEVER rolled
+    # back to empty (the laps keep showing, which is what the warning says).
+    hs = _quali_hud("Team,Best Lap\nOVO eSports,1:38.973\n")
+    assert hs.refresh_quali() is True
+    hs._fetch = lambda url, timeout=10: (_ for _ in ()).throw(RuntimeError("blip"))
+    assert _muted(hs.refresh_quali) is False
+    assert hs.quali_times() == {"ovo-esports": "1:38.973"}
+
+
+def t_hudsource_refresh_is_total_even_if_the_build_raises():
+    # refresh() runs in the HUD poll thread, which calls it bare — an escaping
+    # exception would kill the poll for the rest of the relay run and freeze the
+    # on-air overlay with no log. So it must be total: any failure -> last_error +
+    # False, including one from the data build (which sits after the fetches).
+    hs = _quali_hud()
+    orig = m.build_hud_data
+    m.build_hud_data = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        assert hs.refresh() is False
+        assert "boom" in (hs.last_error or ""), hs.last_error
+    finally:
+        m.build_hud_data = orig
 
 
 def t_hudsource_empty_and_resolve_team_carry_new_keys():
@@ -811,10 +941,22 @@ def t_hudsource_empty_and_resolve_team_carry_new_keys():
             "bgColor", "textColor", "qualiLap"}
     assert set(m.HudSource.EMPTY["teams"][0]) == keys
     hs = _quali_hud("Team,Best Lap\nFeel Good,1:39.104\n")
+    hs.refresh_quali()
     hs.refresh()
     e = hs.resolve_team("Feel Good")
     assert set(e) == keys, e
     assert e["qualiLap"] == "1:39.104", e
+
+
+def t_resolve_team_gets_the_right_car_of_a_two_car_team():
+    # resolve_team delegates to team_entry, so it inherits the per-car lookup —
+    # the panel's optimistic echo shows the lap of the car it just put on air.
+    hs = _quali_hud("Team,Best Lap\nGhost Racing #14,1:38.100\n"
+                    "Ghost Racing #54,1:39.900\n")
+    assert hs.refresh_quali() is True
+    hs.refresh()
+    assert hs.resolve_team("Ghost Racing #14")["qualiLap"] == "1:38.100"
+    assert hs.resolve_team("Ghost Racing #54")["qualiLap"] == "1:39.900"
 
 
 def t_hudsource_team_override_padding_shape():
@@ -865,16 +1007,21 @@ def t_hudsource_quali_warning_logs_once_then_resets_on_success():
     orig_warning = m.LOG.warning
     m.LOG.warning = lambda *a, **k: calls.append(a)
     try:
-        assert hs.refresh() is True
+        assert hs.refresh_quali() is False
         assert len(calls) == 1, "first failure must warn"
-        assert hs.refresh() is True
+        assert hs.refresh_quali() is False
         assert len(calls) == 1, "a repeat failure of the same kind must stay silent"
         state["boom"] = False
-        assert hs.refresh() is True   # success resets the gate
+        assert hs.refresh_quali() is True   # success resets the gate
         assert hs.quali_times() == {"ovo-esports": "1:38.973"}
         state["boom"] = True
-        assert hs.refresh() is True
+        assert hs.refresh_quali() is False
         assert len(calls) == 2, "a NEW failure after a success must warn again"
+        # The warning must not claim the laps blank — a transient failure keeps
+        # showing the last known times (the case somebody actually reads a log for).
+        msg = calls[0][0]
+        assert "stay blank" not in msg, msg
+        assert "last known" in msg, msg
     finally:
         m.LOG.warning = orig_warning
 
@@ -883,6 +1030,114 @@ def t_quali_times_tab_is_its_own_tab():
     # A NEW sheet tab, never the qualifying SCHEDULE tab (which owns 'Qualifying').
     assert m.DEFAULT_QUALI_TIMES_TAB == "Quali Times"
     assert m.DEFAULT_QUALI_TIMES_TAB != m.DEFAULT_QUALIFYING_TAB
+
+
+class _CountdownEvent:
+    """A stop_evt stand-in for the poll loops: wait() returns False (keep going)
+    n times, then True (stop) — so a loop runs exactly n iterations with no sleep."""
+
+    def __init__(self, n):
+        self.n = n
+        self.waits = []
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        self.n -= 1
+        return self.n < 0
+
+
+def t_quali_poll_interval_is_slow():
+    # Quali times are entered ONCE between qualifying and the race — they need no
+    # 5 s freshness, and the point of the separate thread is that they cost the HUD
+    # refresh nothing.
+    assert m.QUALI_TIMES_POLL_S >= 60
+
+
+def t_quali_poller_polls_on_its_own_cadence_and_survives_a_raise():
+    class _Src:
+        def __init__(self):
+            self.calls = 0
+
+        def refresh_quali(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("unexpected")
+            return True
+
+    src, evt = _Src(), _CountdownEvent(3)
+    orig_warning = m.LOG.warning
+    m.LOG.warning = lambda *a, **k: None
+    try:
+        m.quali_poller(src, m.QUALI_TIMES_POLL_S, evt)
+    finally:
+        m.LOG.warning = orig_warning
+    assert src.calls == 3, src.calls          # a raise did not kill the loop
+    assert evt.waits == [m.QUALI_TIMES_POLL_S] * 4, evt.waits
+
+
+def t_poller_survives_a_raising_refresh():
+    # The HUD/schedule poll threads call refresh() bare; a raise used to kill the
+    # thread silently for the rest of the relay run (frozen overlay, no log).
+    class _Boom:
+        def __init__(self):
+            self.calls = 0
+
+        def refresh(self):
+            self.calls += 1
+            raise RuntimeError("kaboom")
+
+    src, evt = _Boom(), _CountdownEvent(3)
+    calls = []
+    orig_warning = m.LOG.warning
+    m.LOG.warning = lambda *a, **k: calls.append(a)
+    try:
+        m.poller(src, 5, evt)
+    finally:
+        m.LOG.warning = orig_warning
+    assert src.calls == 3, src.calls
+    assert len(calls) == 3, calls              # and it is never silent
+
+
+def _hud_data_route(mode="race", quali_text=None):
+    """GET /hud/data off a real make_handler server with a stubbed relay and a
+    stubbed HudSource. Mirrors the _get_route pattern above."""
+    import json as _json, threading as _t
+    from urllib.request import urlopen
+
+    class _StubRelay:
+        def __init__(self):
+            self.mode = mode
+
+        def pov_active(self):
+            return False
+
+        def pov_name(self):
+            return ""
+
+    hs = _quali_hud(quali_text)
+    hs.refresh_quali()
+    hs.refresh()
+    handler = m.make_handler(_StubRelay(), hud_source=hs)
+    srv = m.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    _t.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with urlopen(f"http://127.0.0.1:{srv.server_address[1]}/hud/data",
+                     timeout=5) as r:
+            return _json.loads(r.read().decode("utf-8"))
+    finally:
+        srv.shutdown()
+
+
+def t_hud_data_route_carries_the_relay_mode():
+    # The one line that makes body[data-mode] work; it lives in the route, not in
+    # a pure function, so it needs the live-handler check.
+    assert _hud_data_route("qualifying")["mode"] == "qualifying"
+    assert _hud_data_route("race")["mode"] == "race"
+
+
+def t_hud_data_route_carries_the_quali_lap():
+    d = _hud_data_route("race", "Team,Best Lap\nOVO eSports,1:38.973\n")
+    assert d["teams"][0]["qualiLap"] == "1:38.973", d["teams"][0]
 
 
 if __name__ == "__main__":
