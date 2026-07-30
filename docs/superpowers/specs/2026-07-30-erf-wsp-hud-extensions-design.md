@@ -78,7 +78,8 @@ capability that any profile can consume or ignore.
   `#NNN` first, so `Tavernello Racing #6`, `Tavernello Racing` and `tavernello racing` all
   hit the same key. Robust against number/spelling variants, per the issue.
 - Columns are located by header name (case-insensitive), like every other tab. A missing
-  header, missing tab, or unreachable fetch = no quali times, nothing else affected.
+  header, or a tab that was never created, yields no quali times; a *transient* fetch
+  problem never blanks laps already loaded — see Core changes → 1 (Relay parsers + join).
 - **The `Best Lap` column must be formatted as plain text** (`Format → Number → Plain
   text`). Otherwise Google Sheets parses `1:38.973` as a duration (38.973 *minutes*) and the
   gviz CSV export already carries the mangled value. Documented as a one-time setup step.
