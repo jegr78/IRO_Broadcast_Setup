@@ -5169,17 +5169,25 @@ class CrewSource:
 OVERRIDE_TTL = 30  # s: unconfirmed panel write -> HUD falls back to sheet truth
 
 
+# The team-entry key set, spelled once. EMPTY, the override padding and
+# resolve_team all build from it so a new field cannot be forgotten in one of
+# them (a forgotten key blanks a tile for the 30 s of an optimistic echo).
+EMPTY_TEAM_ENTRY = {"name": "", "number": "", "brandKey": "", "brandName": "",
+                    "label": "", "bgColor": "", "textColor": "", "qualiLap": ""}
+
+
 class HudSource:
     """Reads the Overlay + Configuration tabs and serves the /hud/data dict
     with last-good caching (mirrors ScheduleSource robustness)."""
     EMPTY = {"stint": "", "streamer": "", "session": "",
              "round": {"top": "", "country": "", "flagKey": ""},
-             "teams": [{"name": "", "number": "", "brandKey": "", "brandName": "", "label": ""} for _ in range(3)],
+             "teams": [dict(EMPTY_TEAM_ENTRY) for _ in range(3)],
              "raceControl": "", "flag": ""}
 
-    def __init__(self, overlay_url, config_url, cache_path):
+    def __init__(self, overlay_url, config_url, cache_path, quali_url=None):
         self.overlay_url = overlay_url
         self.config_url = config_url
+        self.quali_url = quali_url      # None = no Quali Times tab configured
         self.cache_path = cache_path
         self.lock = threading.Lock()
         self._data = None
@@ -5188,6 +5196,8 @@ class HudSource:
         self._rc_note_presets = []
         self._roster = {}
         self._roster_full = {}   # stripped team name -> verbatim Configuration label
+        self._quali = {}
+        self._quali_warned = False
         self.overrides = {}   # hud-data key -> (value, expires_ts)
         self.team_overrides = {}   # slot index 0..2 -> (entry_dict, expires_ts)
         self.last_ok = None
@@ -5208,6 +5218,19 @@ class HudSource:
             self._data = None
 
     def refresh(self, timeout=10):
+        # The Quali Times tab (issue #555) is OPTIONAL and fetched on its own:
+        # refresh() is otherwise all-or-nothing, so a league that never created
+        # the tab would fail every refresh and freeze the whole overlay on
+        # last-good data. Failure here = keep the last-good map, log once.
+        quali = self._quali
+        if self.quali_url:
+            try:
+                quali = parse_quali_times(self._fetch(self.quali_url, timeout))
+            except Exception as e:
+                if not self._quali_warned:
+                    LOG.warning("quali times unavailable (%s: %s) — tile lap "
+                                "times stay blank", type(e).__name__, e)
+                    self._quali_warned = True
         try:
             overlay = parse_overlay(self._fetch(self.overlay_url, timeout))
             config_text = self._fetch(self.config_url, timeout)
@@ -5216,12 +5239,13 @@ class HudSource:
             vocab = parse_config_vocab(config_text)
             cue_presets = parse_cue_presets(config_text)
             rc_note_presets = parse_rc_note_presets(config_text)
-            data = build_hud_data(overlay, roster)
+            data = build_hud_data(overlay, roster, quali)
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             return False
         with self.lock:
             self._data = data
+            self._quali = quali
             self._vocab = vocab
             self._cue_presets = cue_presets
             self._rc_note_presets = rc_note_presets
@@ -5271,7 +5295,7 @@ class HudSource:
             if self.team_overrides:
                 teams = [dict(t) for t in out.get("teams", [])]
                 while len(teams) < 3:
-                    teams.append({"name": "", "number": "", "brandKey": "", "brandName": "", "label": ""})
+                    teams.append(dict(EMPTY_TEAM_ENTRY))
                 for s, (e, _exp) in self.team_overrides.items():
                     if 0 <= s < len(teams):
                         teams[s] = dict(e)
@@ -5295,6 +5319,12 @@ class HudSource:
         with self.lock:
             return list(self._roster.keys())
 
+    def quali_times(self):
+        """The Quali Times map {asset_key: lap}, last-good (empty when the tab is
+        absent/unreachable)."""
+        with self.lock:
+            return dict(self._quali)
+
     def resolve_team(self, label):
         """A /hud/data team entry for a roster label (the verbatim '#NNN' value the
         panel dropdown sends) or an unknown label. Looks up the verbatim label
@@ -5304,11 +5334,15 @@ class HudSource:
         name, embedded = split_team_label(label)
         with self.lock:
             info = self._roster.get(label) or self._roster.get(name) or {}
+            lap = self._quali.get(asset_key(name), "")
         return {"name": name,
                 "number": info.get("number") or embedded,
                 "brandKey": info.get("brandKey", ""),
                 "brandName": info.get("brandName", ""),
-                "label": label}
+                "label": label,
+                "bgColor": info.get("bgColor", ""),
+                "textColor": info.get("textColor", ""),
+                "qualiLap": lap}
 
     def full_team_name(self, name):
         """The verbatim Configuration team label (e.g. 'OVO eSports #111') to write

@@ -489,10 +489,12 @@ def t_hud_roster_names_and_resolve():
     hs = _roster_hud()
     assert hs.roster_names() == ["OVO eSports", "Feel Good"]
     assert hs.resolve_team("OVO eSports") == {"name": "OVO eSports", "number": "111",
-        "brandKey": "porsche", "brandName": "Porsche", "label": "OVO eSports"}
+        "brandKey": "porsche", "brandName": "Porsche", "label": "OVO eSports",
+        "bgColor": "", "textColor": "", "qualiLap": ""}
     # unknown -> stripped name, blank number/logo (embedded #9 used as fallback number)
     assert hs.resolve_team("Ghost #9") == {"name": "Ghost", "number": "9",
-        "brandKey": "", "brandName": "", "label": "Ghost #9"}
+        "brandKey": "", "brandName": "", "label": "Ghost #9",
+        "bgColor": "", "textColor": "", "qualiLap": ""}
 
 def t_hud_team_override_echo_and_pending():
     hs = _roster_hud()
@@ -740,6 +742,89 @@ def t_build_hud_data_carries_colors_and_quali():
     assert d["teams"][0]["bgColor"] == "#FFFFFF"
     # a team with no quali row keeps a blank slot (the HUD hides it)
     assert d["teams"][2]["qualiLap"] == ""
+
+
+def _quali_hud(quali_text=None, quali_boom=False):
+    """A HudSource with all three tabs stubbed. quali_boom simulates the tab not
+    existing (gviz raises), the state of every league that never created it."""
+    import tempfile, os as _os
+    d = tempfile.mkdtemp()
+    hs = m.HudSource("http://overlay", "http://config",
+                     _os.path.join(d, "hud.cache.json"), quali_url="http://quali")
+    def fetch(url, timeout=10):
+        if url == "http://overlay":
+            return OVERLAY_CSV
+        if url == "http://quali":
+            if quali_boom:
+                raise RuntimeError("no such sheet tab")
+            return quali_text or ""
+        return CONFIG_CSV
+    hs._fetch = fetch
+    return hs
+
+
+def t_hudsource_reads_quali_times():
+    hs = _quali_hud("Team,Best Lap\nOVO eSports,1:38.973\n")
+    assert hs.refresh() is True
+    assert hs.quali_times() == {"ovo-esports": "1:38.973"}
+    assert hs.data()["teams"][0]["qualiLap"] == "1:38.973"
+
+
+def t_hudsource_refresh_survives_missing_quali_tab():
+    # THE regression this task guards: a league without the tab must still get a
+    # fully refreshed HUD, not a frozen last-good frame.
+    hs = _quali_hud(quali_boom=True)
+    assert hs.refresh() is True, "a failing quali fetch must not fail the refresh"
+    assert hs.data()["streamer"] == "JeGr"
+    assert hs.data()["teams"][0]["qualiLap"] == ""
+    assert hs.quali_times() == {}
+
+
+def t_hudsource_quali_times_preserved_on_overlay_failure():
+    hs = _quali_hud("Team,Best Lap\nOVO eSports,1:38.973\n")
+    assert hs.refresh() is True
+    def boom(url, timeout=10):
+        raise RuntimeError("sheet down")
+    hs._fetch = boom
+    assert hs.refresh() is False
+    assert hs.quali_times() == {"ovo-esports": "1:38.973"}   # last-good kept
+
+
+def t_hudsource_no_quali_url_makes_no_third_fetch():
+    import tempfile, os as _os
+    d = tempfile.mkdtemp()
+    hs = m.HudSource("http://overlay", "http://config",
+                     _os.path.join(d, "hud.cache.json"))     # no quali_url
+    seen = []
+    def fetch(url, timeout=10):
+        seen.append(url)
+        return OVERLAY_CSV if url == "http://overlay" else CONFIG_CSV
+    hs._fetch = fetch
+    assert hs.refresh() is True
+    assert seen == ["http://overlay", "http://config"], seen
+
+
+def t_hudsource_empty_and_resolve_team_carry_new_keys():
+    # resolve_team feeds the panel's 30 s optimistic echo. If it omitted the new
+    # keys, an approved team switch would flash a colourless, quali-less tile.
+    keys = {"name", "number", "brandKey", "brandName", "label",
+            "bgColor", "textColor", "qualiLap"}
+    assert set(m.HudSource.EMPTY["teams"][0]) == keys
+    hs = _quali_hud("Team,Best Lap\nFeel Good,1:39.104\n")
+    hs.refresh()
+    e = hs.resolve_team("Feel Good")
+    assert set(e) == keys, e
+    assert e["qualiLap"] == "1:39.104", e
+
+
+def t_hudsource_team_override_padding_shape():
+    # An override on slot 2 with fewer than 3 sheet teams pads the list; the pad
+    # entries must carry the same key set as a real one.
+    hs = _quali_hud()
+    hs.refresh()
+    hs.set_team_override(2, hs.resolve_team("Ghost #9"), now=1000.0)
+    for t in hs.data(now=1001.0)["teams"]:
+        assert set(t) == set(m.HudSource.EMPTY["teams"][0]), t
 
 
 if __name__ == "__main__":
