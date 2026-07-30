@@ -1713,18 +1713,96 @@ def _crew_truthy(v):
     return (v or "").strip().lower() in CREW_TRUTHY
 
 
+# Optional per-team tile colours (issue #555): a flat background + text colour per
+# car, published by the HUD as --team-bg/--team-fg and consumed by a profile's
+# overlay CSS. Header-located like every other Configuration column, so positions
+# stay free; absent column or blank cell -> "" and the profile's CSS fallback wins.
+TEAM_BG_COLOR_HEADERS = ("bg color", "bg colour", "background color",
+                         "background colour")
+TEAM_TEXT_COLOR_HEADERS = ("text color", "text colour", "fg color", "fg colour")
+
+# A plausible CSS colour token: #rgb/#rgba/#rrggbb/#rrggbbaa, an rgb()/rgba()
+# function, or a bare keyword. Anything else -> "". This is the gate that keeps a
+# sheet cell from smuggling a url() (a resource fetch) into the custom property
+# the HUD sets on its slots — the sheet is admin-managed, but the overlay renders
+# on air and a typo must never turn into a network request.
+CSS_COLOR_RE = re.compile(
+    r"^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})"
+    r"|rgba?\([0-9.,%\s/]+\)"
+    r"|[a-z]{3,20})$", re.I)
+
+
+def sanitize_css_color(v):
+    """A sheet colour cell -> a safe CSS colour string, or '' when implausible."""
+    s = (v or "").strip()
+    return s if CSS_COLOR_RE.match(s) else ""
+
+
+# Quali Times tab (issue #555): Team | Best Lap, one row per car, maintained ONCE
+# between qualifying and the race. Deliberately NOT the 'Qualifying' tab — that
+# name is the qualifying SCHEDULE (DEFAULT_QUALIFYING_TAB).
+QUALI_TEAM_HEADERS = ("team", "teams", "team name")
+QUALI_LAP_HEADERS = ("best lap", "best-lap", "bestlap", "quali time", "quali", "lap")
+
+# A best lap a Sheets duration format produced ('0:01:38.973'): the hours group is
+# dropped when zero, so the HUD shows the broadcast form '1:38.973'.
+QUALI_LAP_DURATION_RE = re.compile(r"^(\d{1,2}):(\d{1,2}):(\d{2}(?:\.\d+)?)$")
+
+
+def normalize_quali_lap(v):
+    """A 'Best Lap' cell -> the HUD display string. Verbatim except two
+    deterministic fixes: a comma decimal becomes a dot, and a ZERO hours group
+    from a Sheets duration-formatted cell is dropped ('0:01:38,973' ->
+    '1:38.973'). A non-zero hour is left alone — implausible for a lap, but
+    showing the cell beats silently destroying it. No conversion to seconds and
+    no reformatting: the sheet stays WYSIWYG, like every other HUD text field."""
+    s = (v or "").strip().replace(",", ".")
+    mt = QUALI_LAP_DURATION_RE.match(s)
+    if mt and not mt.group(1).strip("0"):
+        return f"{int(mt.group(2))}:{mt.group(3)}"
+    return s
+
+
+def parse_quali_times(text):
+    """Quali Times tab CSV -> {asset_key(team): display_lap}. Keyed by the
+    asset_key of the STRIPPED team name (a trailing '#NNN' is peeled first), so
+    'Tavernello Racing #6', 'Tavernello Racing' and 'tavernello racing' all hit the
+    same entry — robust against number/spelling variants. Columns are located by
+    header name; a missing tab, missing header, or either column absent -> {}, so a
+    league without this tab is simply unaffected. First row per team wins."""
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        return {}
+    header = [(h or "").strip().lower() for h in rows[0]]
+    ti = next((header.index(h) for h in QUALI_TEAM_HEADERS if h in header), None)
+    li = next((header.index(h) for h in QUALI_LAP_HEADERS if h in header), None)
+    if ti is None or li is None:
+        return {}
+    out = {}
+    for row in rows[1:]:
+        if len(row) <= ti or len(row) <= li:
+            continue
+        name, _embedded = split_team_label((row[ti] or "").strip())
+        key, lap = asset_key(name), normalize_quali_lap(row[li])
+        if key and lap:
+            out.setdefault(key, lap)
+    return out
+
+
 def parse_config_roster(text):
     """Configuration tab CSV -> roster {team_label: {"number": str, "brandKey": str,
-    "brandName": str}}. The dict KEY is the VERBATIM team label (e.g.
-    'Scuderia #14'), so two cars sharing a name but differing in number stay
-    distinct entries — the stripped name is NOT a unique identity. The embedded
-    '#NNN' is peeled off only to derive the fallback car number (split_team_label);
-    the displayed name is stripped later, at HUD render time. brandName = the
-    "Brand Name Override" cell or, when blank, the verbatim brand text; brandKey
-    (the logo) is always asset_key(brand) regardless. The Number column wins over
-    the embedded token, which is only the fallback. Columns are located by header
-    name so positions stay free. A missing team-name header -> {}. A missing
-    Brand/Number column just yields '' for that field."""
+    "brandName": str, "bgColor": str, "textColor": str}}. The dict KEY is the
+    VERBATIM team label (e.g. 'Scuderia #14'), so two cars sharing a name but
+    differing in number stay distinct entries — the stripped name is NOT a unique
+    identity. The embedded '#NNN' is peeled off only to derive the fallback car
+    number (split_team_label); the displayed name is stripped later, at HUD render
+    time. brandName = the "Brand Name Override" cell or, when blank, the verbatim
+    brand text; brandKey (the logo) is always asset_key(brand) regardless. The
+    Number column wins over the embedded token, which is only the fallback.
+    bgColor/textColor are the optional per-team tile colours (sanitize_css_color'd,
+    "" when unset or implausible). Columns are located by header name so positions
+    stay free. A missing team-name header -> {}. A missing Brand/Number/colour
+    column just yields '' for that field."""
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         return {}
@@ -1735,6 +1813,8 @@ def parse_config_roster(text):
     bi = next((header.index(h) for h in BRAND_TEXT_HEADERS if h in header), None)
     oi = next((header.index(h) for h in BRAND_NAME_OVERRIDE_HEADERS if h in header), None)
     ni = next((header.index(h) for h in NUMBER_HEADERS if h in header), None)
+    ci = next((header.index(h) for h in TEAM_BG_COLOR_HEADERS if h in header), None)
+    fi = next((header.index(h) for h in TEAM_TEXT_COLOR_HEADERS if h in header), None)
     out = {}
     for row in rows[1:]:
         if len(row) <= ti:
@@ -1748,7 +1828,11 @@ def parse_config_roster(text):
         override = (row[oi].strip() if oi is not None and len(row) > oi else "")
         out[label] = {"number": col_num or embedded,
                       "brandKey": asset_key(brand_raw),
-                      "brandName": override or brand_raw}
+                      "brandName": override or brand_raw,
+                      "bgColor": sanitize_css_color(
+                          row[ci] if ci is not None and len(row) > ci else ""),
+                      "textColor": sanitize_css_color(
+                          row[fi] if fi is not None and len(row) > fi else "")}
     return out
 
 

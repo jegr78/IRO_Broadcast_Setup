@@ -71,9 +71,15 @@ CONFIG_CSV = (
 def t_parse_config_roster():
     # Keyed by the VERBATIM label (with #NNN) so same-name cars never collide.
     r = m.parse_config_roster(CONFIG_CSV)
-    assert r["OVO eSports #111"] == {"number": "111", "brandKey": "porsche", "brandName": "Porsche"}, r
-    assert r["Feel Good Racing #303"] == {"number": "303", "brandKey": "porsche", "brandName": "Porsche"}, r
-    assert r["NWR Motorsport #224"] == {"number": "224", "brandKey": "ferrari", "brandName": "Ferrari"}, r
+    assert r["OVO eSports #111"] == {"number": "111", "brandKey": "porsche",
+                                     "brandName": "Porsche",
+                                     "bgColor": "", "textColor": ""}, r
+    assert r["Feel Good Racing #303"] == {"number": "303", "brandKey": "porsche",
+                                          "brandName": "Porsche",
+                                          "bgColor": "", "textColor": ""}, r
+    assert r["NWR Motorsport #224"] == {"number": "224", "brandKey": "ferrari",
+                                        "brandName": "Ferrari",
+                                        "bgColor": "", "textColor": ""}, r
 
 
 def t_parse_config_roster_missing_team_header_safe():
@@ -92,9 +98,15 @@ CONFIG_CSV_BRANDNAME = (
 
 def t_parse_config_roster_accepts_brand_name_header():
     r = m.parse_config_roster(CONFIG_CSV_BRANDNAME)
-    assert r["OVO eSports #111"] == {"number": "111", "brandKey": "porsche", "brandName": "Porsche"}, r
-    assert r["Elite Racing Squad #73"] == {"number": "73", "brandKey": "bmw", "brandName": "BMW"}, r
-    assert r["Alien Motorsports #999"] == {"number": "999", "brandKey": "amg", "brandName": "AMG"}, r
+    assert r["OVO eSports #111"] == {"number": "111", "brandKey": "porsche",
+                                     "brandName": "Porsche",
+                                     "bgColor": "", "textColor": ""}, r
+    assert r["Elite Racing Squad #73"] == {"number": "73", "brandKey": "bmw",
+                                           "brandName": "BMW",
+                                           "bgColor": "", "textColor": ""}, r
+    assert r["Alien Motorsports #999"] == {"number": "999", "brandKey": "amg",
+                                           "brandName": "AMG",
+                                           "bgColor": "", "textColor": ""}, r
 
 
 # New "Brand Name Override" column: when present it wins for the DISPLAY name,
@@ -110,16 +122,19 @@ def t_parse_config_roster_brand_name_override():
     r = m.parse_config_roster(CONFIG_CSV_BRAND_OVERRIDE)
     # override wins for the display name; brandKey still maps from Brand ("porsche")
     assert r["OVO eSports #111"] == {
-        "number": "111", "brandKey": "porsche", "brandName": "Porsche 963"}, r
+        "number": "111", "brandKey": "porsche", "brandName": "Porsche 963",
+        "bgColor": "", "textColor": ""}, r
     # empty override falls back to the verbatim brand text
     assert r["Elite Racing Squad #73"] == {
-        "number": "73", "brandKey": "bmw", "brandName": "BMW"}, r
+        "number": "73", "brandKey": "bmw", "brandName": "BMW",
+        "bgColor": "", "textColor": ""}, r
 
 
 def t_parse_config_roster_ignores_image_columns():
     # team header present, only image brand columns -> brandKey blank, number from #1
     assert m.parse_config_roster("Teams,Brand Logo,Brands\nX #1,,\n") == {
-        "X #1": {"number": "1", "brandKey": "", "brandName": ""}}
+        "X #1": {"number": "1", "brandKey": "", "brandName": "",
+                 "bgColor": "", "textColor": ""}}
 
 
 def t_build_hud_data():
@@ -361,9 +376,11 @@ ROSTER_CSV_DUP_NAME = (
 def t_roster_same_name_different_number_kept_distinct():
     r = m.parse_config_roster(ROSTER_CSV_DUP_NAME)
     assert r["Scuderia Adriatica Motorsport #14"] == {
-        "number": "14", "brandKey": "ferrari", "brandName": "Ferrari"}, r
+        "number": "14", "brandKey": "ferrari", "brandName": "Ferrari",
+        "bgColor": "", "textColor": ""}, r
     assert r["Scuderia Adriatica Motorsport #54"] == {
-        "number": "54", "brandKey": "amg", "brandName": "AMG"}, r
+        "number": "54", "brandKey": "amg", "brandName": "AMG",
+        "bgColor": "", "textColor": ""}, r
 
 def t_team_entry_resolves_per_car_by_verbatim_label():
     # The HUD resolves number/brand for the SPECIFIC car in the slot, not
@@ -381,18 +398,23 @@ def t_team_entry_resolves_per_car_by_verbatim_label():
 
 def t_roster_number_column():
     r = m.parse_config_roster(ROSTER_CSV_WITH_NUMBER)
-    assert r == {"OVO eSports": {"number": "111", "brandKey": "porsche", "brandName": "Porsche"},
-                 "Feel Good": {"number": "303", "brandKey": "bmw", "brandName": "BMW"}}, r
+    assert r == {"OVO eSports": {"number": "111", "brandKey": "porsche", "brandName": "Porsche",
+                                 "bgColor": "", "textColor": ""},
+                 "Feel Good": {"number": "303", "brandKey": "bmw", "brandName": "BMW",
+                              "bgColor": "", "textColor": ""}}, r
 
 def t_roster_embedded_fallback():
     r = m.parse_config_roster(ROSTER_CSV_EMBEDDED_ONLY)
-    assert r["OVO eSports #111"] == {"number": "111", "brandKey": "porsche", "brandName": "Porsche"}
-    assert r["Apex Racing #7"] == {"number": "7", "brandKey": "audi", "brandName": "Audi"}
+    assert r["OVO eSports #111"] == {"number": "111", "brandKey": "porsche", "brandName": "Porsche",
+                                     "bgColor": "", "textColor": ""}
+    assert r["Apex Racing #7"] == {"number": "7", "brandKey": "audi", "brandName": "Audi",
+                                   "bgColor": "", "textColor": ""}
 
 def t_roster_column_wins_over_embedded():
     # Key is the verbatim label; the Number column still wins for the car number.
     r = m.parse_config_roster(ROSTER_CSV_BOTH)
-    assert r == {"OVO eSports #999": {"number": "111", "brandKey": "porsche", "brandName": "Porsche"}}, r
+    assert r == {"OVO eSports #999": {"number": "111", "brandKey": "porsche", "brandName": "Porsche",
+                                      "bgColor": "", "textColor": ""}}, r
 
 def t_roster_no_teams_header_is_empty():
     assert m.parse_config_roster("Foo,Bar\n1,2\n") == {}
@@ -427,7 +449,8 @@ def t_build_hud_data_team_number_and_strip():
 
 def t_parse_config_roster_team_name_header():
     r = m.parse_config_roster("Team Name,Number,Brand\nOVO eSports,111,Porsche\n")
-    assert r == {"OVO eSports": {"number": "111", "brandKey": "porsche", "brandName": "Porsche"}}, r
+    assert r == {"OVO eSports": {"number": "111", "brandKey": "porsche", "brandName": "Porsche",
+                                 "bgColor": "", "textColor": ""}}, r
 
 
 def t_hudsource_roster_preserved_on_failure():
@@ -575,6 +598,102 @@ def t_hud_logo_route_serves_image_and_404s():
         assert got.body.startswith(b"\x89PNG")
         none = _get_route(logo_path="", path="/hud/logo")
         assert none.status == 404
+
+
+# ---------- Brand tile colours + quali times (issue #555) ----------
+
+def t_sanitize_css_color_accepts_plausible_values():
+    assert m.sanitize_css_color("#C00000") == "#C00000"
+    assert m.sanitize_css_color("  #fff ") == "#fff"
+    assert m.sanitize_css_color("#12345678") == "#12345678"
+    assert m.sanitize_css_color("rgb(200, 0, 0)") == "rgb(200, 0, 0)"
+    assert m.sanitize_css_color("rgba(200,0,0,.5)") == "rgba(200,0,0,.5)"
+    assert m.sanitize_css_color("white") == "white"
+
+
+def t_sanitize_css_color_rejects_everything_else():
+    # The gate that keeps a sheet cell from smuggling a resource fetch into the
+    # custom property the HUD sets on its slots.
+    assert m.sanitize_css_color("url(http://x/y.png)") == ""
+    assert m.sanitize_css_color("red; background: url(http://x)") == ""
+    assert m.sanitize_css_color("var(--x)") == ""
+    assert m.sanitize_css_color("#12345") == ""       # not 3/4/6/8 hex digits
+    assert m.sanitize_css_color("") == ""
+    assert m.sanitize_css_color(None) == ""
+
+
+def t_normalize_quali_lap_verbatim_and_fixes():
+    assert m.normalize_quali_lap("1:38.973") == "1:38.973"      # verbatim
+    assert m.normalize_quali_lap(" 1:38,973 ") == "1:38.973"    # comma -> dot
+    assert m.normalize_quali_lap("0:01:38,973") == "1:38.973"   # sheets duration
+    assert m.normalize_quali_lap("00:01:38.973") == "1:38.973"
+    assert m.normalize_quali_lap("0:1:38.973") == "1:38.973"
+    assert m.normalize_quali_lap("98.973") == "98.973"          # no conversion
+    assert m.normalize_quali_lap("1:02:03.400") == "1:02:03.400"  # non-zero hour kept
+    assert m.normalize_quali_lap("") == ""
+    assert m.normalize_quali_lap(None) == ""
+
+
+QUALI_CSV = (
+    "Team,Best Lap\n"
+    "Tavernello Racing #6,1:38.973\n"
+    # comma decimal, no embedded number; a real Sheets CSV export quotes a cell
+    # whose value itself contains a comma.
+    "N3XUS Racing,\"1:39,104\"\n"
+    "Trrack Design Racing #51,0:01:40.512\n"   # sheets duration formatting
+    ",1:00.000\n"                      # no team -> skipped
+    "Ghost Racing,\n"                  # no lap -> skipped
+)
+
+
+def t_parse_quali_times_keys_by_asset_key_of_stripped_name():
+    q = m.parse_quali_times(QUALI_CSV)
+    assert q == {"tavernello-racing": "1:38.973",
+                 "n3xus-racing": "1:39.104",
+                 "trrack-design-racing": "1:40.512"}, q
+
+
+def t_parse_quali_times_tolerates_missing_pieces():
+    assert m.parse_quali_times("") == {}
+    assert m.parse_quali_times("Team,Something\nX,1:2.3\n") == {}   # no lap header
+    assert m.parse_quali_times("Foo,Best Lap\nX,1:2.3\n") == {}     # no team header
+    assert m.parse_quali_times("Team,Best Lap\n") == {}             # header only
+    # A Configuration CSV accidentally pointed at this parser yields nothing
+    # rather than garbage (no 'Best Lap' column there).
+    assert m.parse_quali_times(CONFIG_CSV) == {}
+
+
+def t_parse_quali_times_first_row_per_team_wins():
+    q = m.parse_quali_times("Team,Best Lap\nA Team #1,1:38.000\nA Team #2,1:39.000\n")
+    assert q == {"a-team": "1:38.000"}, q
+
+
+CONFIG_CSV_COLORS = (
+    "Teams,Number,Brand Name,BG Color,Text Color\n"
+    "OVO eSports,111,Porsche,#FFFFFF,#111111\n"
+    # rgb(...) has an internal comma, so a real Sheets CSV export quotes the cell.
+    "Feel Good,303,BMW,\"rgb(0,80,160)\",white\n"
+    "Ghost,7,Audi,url(http://evil/x.png),#00FF00\n"   # rejected -> blank bg
+)
+
+
+def t_parse_config_roster_reads_tile_colors():
+    r = m.parse_config_roster(CONFIG_CSV_COLORS)
+    assert r["OVO eSports"]["bgColor"] == "#FFFFFF"
+    assert r["OVO eSports"]["textColor"] == "#111111"
+    assert r["Feel Good"]["bgColor"] == "rgb(0,80,160)"
+    assert r["Feel Good"]["textColor"] == "white"
+    # implausible value is dropped, the rest of the row survives
+    assert r["Ghost"]["bgColor"] == ""
+    assert r["Ghost"]["textColor"] == "#00FF00"
+    assert r["Ghost"]["brandKey"] == "audi"
+
+
+def t_parse_config_roster_colors_blank_without_columns():
+    # Every existing league has no colour columns -> keys present, values blank.
+    r = m.parse_config_roster(CONFIG_CSV)
+    assert r["OVO eSports #111"]["bgColor"] == ""
+    assert r["OVO eSports #111"]["textColor"] == ""
 
 
 if __name__ == "__main__":
