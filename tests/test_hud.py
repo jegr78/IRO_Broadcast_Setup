@@ -819,12 +819,64 @@ def t_hudsource_empty_and_resolve_team_carry_new_keys():
 
 def t_hudsource_team_override_padding_shape():
     # An override on slot 2 with fewer than 3 sheet teams pads the list; the pad
-    # entries must carry the same key set as a real one.
-    hs = _quali_hud()
-    hs.refresh()
+    # entries must carry the same key set as a real one. A live refresh() always
+    # yields exactly 3 team slots (parse_overlay pre-fills ["", "", ""] before
+    # reading any row, so build_hud_data's teams list is always length 3, even
+    # when only P1 is populated in the sheet) -- so the ONLY way data() ever
+    # sees fewer than 3 cached teams is a short/legacy on-disk hud.cache.json
+    # (predating this shape). Simulate that directly by setting _data, so the
+    # `while len(teams) < 3` pad loop is actually exercised (round-1 review
+    # finding: the previous fixture never triggered it).
+    import tempfile, os as _os
+    d = tempfile.mkdtemp()
+    hs = m.HudSource("http://overlay", "http://config",
+                     _os.path.join(d, "hud.cache.json"))
+    hs._data = {"stint": "", "streamer": "", "session": "",
+                "round": {"top": "", "country": "", "flagKey": ""},
+                "teams": [dict(m.EMPTY_TEAM_ENTRY)],   # only ONE cached slot
+                "raceControl": "", "flag": ""}
     hs.set_team_override(2, hs.resolve_team("Ghost #9"), now=1000.0)
-    for t in hs.data(now=1001.0)["teams"]:
-        assert set(t) == set(m.HudSource.EMPTY["teams"][0]), t
+    teams = hs.data(now=1001.0)["teams"]
+    assert len(teams) == 3, teams   # padded up from 1 to 3
+    for t in teams:
+        assert set(t) == set(m.EMPTY_TEAM_ENTRY), t
+
+
+def t_hudsource_quali_warning_logs_once_then_resets_on_success():
+    # The "log once per relay run" gate (round-1 review finding 5): a repeat
+    # failure of the SAME kind stays silent after the first warning; a success
+    # in between clears the gate so a later, NEW failure warns again (finding 2).
+    import tempfile, os as _os
+    d = tempfile.mkdtemp()
+    hs = m.HudSource("http://overlay", "http://config",
+                     _os.path.join(d, "hud.cache.json"), quali_url="http://quali")
+    state = {"boom": True}
+    def fetch(url, timeout=10):
+        if url == "http://overlay":
+            return OVERLAY_CSV
+        if url == "http://quali":
+            if state["boom"]:
+                raise RuntimeError("no such sheet tab")
+            return "Team,Best Lap\nOVO eSports,1:38.973\n"
+        return CONFIG_CSV
+    hs._fetch = fetch
+
+    calls = []
+    orig_warning = m.LOG.warning
+    m.LOG.warning = lambda *a, **k: calls.append(a)
+    try:
+        assert hs.refresh() is True
+        assert len(calls) == 1, "first failure must warn"
+        assert hs.refresh() is True
+        assert len(calls) == 1, "a repeat failure of the same kind must stay silent"
+        state["boom"] = False
+        assert hs.refresh() is True   # success resets the gate
+        assert hs.quali_times() == {"ovo-esports": "1:38.973"}
+        state["boom"] = True
+        assert hs.refresh() is True
+        assert len(calls) == 2, "a NEW failure after a success must warn again"
+    finally:
+        m.LOG.warning = orig_warning
 
 
 if __name__ == "__main__":

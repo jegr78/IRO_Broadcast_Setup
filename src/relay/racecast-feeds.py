@@ -5169,9 +5169,14 @@ class CrewSource:
 OVERRIDE_TTL = 30  # s: unconfirmed panel write -> HUD falls back to sheet truth
 
 
-# The team-entry key set, spelled once. EMPTY, the override padding and
-# resolve_team all build from it so a new field cannot be forgotten in one of
-# them (a forgotten key blanks a tile for the 30 s of an optimistic echo).
+# The team-entry key set, spelled once. EMPTY and the override padding build
+# directly from it (a placeholder has no live values to compute, so there is
+# nothing to join). The one constructor that DOES join live values -- roster
+# lookup + quali lookup -- is team_entry; HudSource.resolve_team delegates to
+# it instead of duplicating that join, so a new field needs adding in exactly
+# two places (this literal, and team_entry's return dict), never three or four
+# (a forgotten key there would blank a tile for the 30 s of an optimistic echo
+# -- the bug that made the suite red between 805b1627 and b50fc381).
 EMPTY_TEAM_ENTRY = {"name": "", "number": "", "brandKey": "", "brandName": "",
                     "label": "", "bgColor": "", "textColor": "", "qualiLap": ""}
 
@@ -5221,11 +5226,17 @@ class HudSource:
         # The Quali Times tab (issue #555) is OPTIONAL and fetched on its own:
         # refresh() is otherwise all-or-nothing, so a league that never created
         # the tab would fail every refresh and freeze the whole overlay on
-        # last-good data. Failure here = keep the last-good map, log once.
-        quali = self._quali
+        # last-good data. Failure here = keep the last-good map (re-read fresh
+        # under the lock at commit time below -- NOT the value read here --
+        # so a concurrent refresh()'s newer commit is never rolled back), and
+        # log once; a success resets the gate so a later, DIFFERENT failure
+        # (e.g. a parse error after a sheet-format change) still warns.
+        quali, quali_ok = None, False
         if self.quali_url:
             try:
                 quali = parse_quali_times(self._fetch(self.quali_url, timeout))
+                quali_ok = True
+                self._quali_warned = False
             except Exception as e:
                 if not self._quali_warned:
                     LOG.warning("quali times unavailable (%s: %s) — tile lap "
@@ -5239,11 +5250,13 @@ class HudSource:
             vocab = parse_config_vocab(config_text)
             cue_presets = parse_cue_presets(config_text)
             rc_note_presets = parse_rc_note_presets(config_text)
-            data = build_hud_data(overlay, roster, quali)
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             return False
         with self.lock:
+            if not quali_ok:
+                quali = self._quali   # last-good, re-read fresh under the lock
+            data = build_hud_data(overlay, roster, quali)
             self._data = data
             self._quali = quali
             self._vocab = vocab
@@ -5327,22 +5340,15 @@ class HudSource:
 
     def resolve_team(self, label):
         """A /hud/data team entry for a roster label (the verbatim '#NNN' value the
-        panel dropdown sends) or an unknown label. Looks up the verbatim label
-        first (per-car identity), then a stripped-name fallback; the entry carries
-        the verbatim 'label' back for the panel's optimistic echo."""
-        label = (label or "").strip()
-        name, embedded = split_team_label(label)
+        panel dropdown sends) or an unknown label. Delegates to team_entry --
+        the same join a live Overlay slot value gets (verbatim-label-first
+        lookup, then a stripped-name fallback, the verbatim 'label' riding
+        along for the panel's optimistic echo) -- so the two constructors can
+        never drift apart. Only the roster/quali snapshot is taken under the
+        lock; the join itself runs lock-free."""
         with self.lock:
-            info = self._roster.get(label) or self._roster.get(name) or {}
-            lap = self._quali.get(asset_key(name), "")
-        return {"name": name,
-                "number": info.get("number") or embedded,
-                "brandKey": info.get("brandKey", ""),
-                "brandName": info.get("brandName", ""),
-                "label": label,
-                "bgColor": info.get("bgColor", ""),
-                "textColor": info.get("textColor", ""),
-                "qualiLap": lap}
+            roster, quali = dict(self._roster), dict(self._quali)
+        return team_entry(label, roster, quali)
 
     def full_team_name(self, name):
         """The verbatim Configuration team label (e.g. 'OVO eSports #111') to write
