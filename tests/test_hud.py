@@ -879,6 +879,12 @@ def t_hudsource_quali_warning_logs_once_then_resets_on_success():
         m.LOG.warning = orig_warning
 
 
+def t_quali_times_tab_is_its_own_tab():
+    # A NEW sheet tab, never the qualifying SCHEDULE tab (which owns 'Qualifying').
+    assert m.DEFAULT_QUALI_TIMES_TAB == "Quali Times"
+    assert m.DEFAULT_QUALI_TIMES_TAB != m.DEFAULT_QUALIFYING_TAB
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):

@@ -1062,6 +1062,10 @@ DEFAULT_POV_TAB = "POV"
 # the Schedule tab (URL/Streamer/Stint). It is a single stream served on Feed A;
 # the relay switches its active schedule between race and qualifying (issue #124).
 DEFAULT_QUALIFYING_TAB = "Qualifying"
+# Quali Times tab (issue #555): per-car best lap shown in the race tiles. A
+# SEPARATE tab from DEFAULT_QUALIFYING_TAB above, which is the qualifying
+# SCHEDULE (URL/Streamer/Stint) — the two must never share a name.
+DEFAULT_QUALI_TIMES_TAB = "Quali Times"
 
 # ---------- Network bind resolution (auto dual-bind: localhost + Tailscale) ----
 # OBS always reaches the control/HUD server on 127.0.0.1 (a fixed, machine-
@@ -8542,6 +8546,10 @@ def make_handler(relay, panel_path=None, hud_source=None, hud_path=None, assets_
                     data = hud_source.data()           # already a shallow copy
                     data["povActive"] = relay.pov_active()
                     data["povName"] = relay.pov_name()
+                    # Race vs qualifying, so a profile's overlay CSS can gate on
+                    # body[data-mode] (issue #555). Relay state, like povActive —
+                    # deliberately not part of HudSource.
+                    data["mode"] = relay.mode
                     return self._send(data)
                 if p == ["hud", "preview"]:
                     if not preview_path:
@@ -9612,6 +9620,9 @@ def main():
                     help="Google-Sheet tab with the live HUD values (default 'Overlay').")
     ap.add_argument("--config-tab", default="Configuration",
                     help="Google-Sheet tab with the team→brand map (default 'Configuration').")
+    ap.add_argument("--quali-times-tab", default=DEFAULT_QUALI_TIMES_TAB,
+                    help="Google-Sheet tab with per-car qualifying best laps "
+                         "(default 'Quali Times'). Absent tab = blank lap slots.")
     ap.add_argument("--hud-poll", type=int, default=5,
                     help="HUD sheet refresh interval in seconds (default 5).")
     ap.add_argument("--no-hud", action="store_true",
@@ -9881,8 +9892,10 @@ def main():
         base = f"https://docs.google.com/spreadsheets/d/{args.sheet_id}/gviz/tq?tqx=out:csv&sheet="
         overlay_url = base + quote(args.overlay_tab)
         config_url = base + quote(args.config_tab)
+        quali_url = base + quote(args.quali_times_tab)
         hud_cache = os.path.join(runtime, "hud.cache.json")
-        hud_source = HudSource(overlay_url, config_url, hud_cache)
+        hud_source = HudSource(overlay_url, config_url, hud_cache,
+                               quali_url=quali_url)
         hud_source.refresh()   # non-fatal: keeps last-good / empty if unreachable
         for cand in (os.path.join(here, "hud.html"),
                      os.path.join(here, "..", "hud.html"),
