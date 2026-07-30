@@ -226,9 +226,12 @@ def t_ob_extract_slots_from_real_hud():
     # the league-logo box (Solo Commentary HUD, epic #300), and the merged clock slot.
     assert ids == ["stint", "session", "streamer", "round-top", "round-flag",
                    "round-country",
-                   "team1-logo", "team1-num", "team1-name", "team1-brand",
-                   "team2-logo", "team2-num", "team2-name", "team2-brand",
-                   "team3-logo", "team3-num", "team3-name", "team3-brand",
+                   "team1-bar", "team1-logo", "team1-num", "team1-name",
+                   "team1-brand", "team1-quali",
+                   "team2-bar", "team2-logo", "team2-num", "team2-name",
+                   "team2-brand", "team2-quali",
+                   "team3-bar", "team3-logo", "team3-num", "team3-name",
+                   "team3-brand", "team3-quali",
                    "race-control", "flag-status", "pov", "pov-name", "league-logo",
                    # Stream-chat slot (Solo Commentary HUD, epic #300): self-gating
                    # box rendering the read-only broadcast chat (issue #294),
@@ -1030,6 +1033,32 @@ def t_intermission_page_polls_broadcast_chat_and_links_override():
     assert "/broadcast-chat/data" in html         # reuses the existing endpoint
     assert "/intermission/override.css" in html   # per-league override link
     assert 'id="ichat"' in html and 'id="ichat-log"' in html
+
+
+def t_ob_team_bar_is_a_box_slot_before_the_logo():
+    # The tile colour bar must be the FIRST slot of its tile: the slots are
+    # absolutely-positioned siblings, so DOM order is the paint order — a bar
+    # after the logo would cover logo/number/model (issue #555).
+    with open(os.path.join(ROOT, "src", "obs", "hud.html"), encoding="utf-8") as f:
+        slots = ob.extract_slots(f.read())
+    ids = [s["id"] for s in slots]
+    for n in (1, 2, 3):
+        assert ids.index(f"team{n}-bar") < ids.index(f"team{n}-logo")
+    by = {s["id"]: s for s in slots}
+    assert by["team1-bar"]["props"] == list(ob.KIND_BOX)
+    assert by["team1-quali"]["props"] == list(ob.KIND_TEXT)
+
+
+def t_hud_page_publishes_team_colors_and_mode():
+    # The base HUD must expose the colours as custom properties and the mode as a
+    # body attribute — and contain NO league colour literal of its own.
+    with open(os.path.join(ROOT, "src", "obs", "hud.html"), encoding="utf-8") as f:
+        html = f.read()
+    assert "--team-bg" in html and "--team-fg" in html
+    assert "dataset.mode" in html
+    assert "qualiLap" in html
+    # the bar carries no background in base — a profile decides
+    assert "background: var(--team-bg)" not in html
 
 
 if __name__ == "__main__":
