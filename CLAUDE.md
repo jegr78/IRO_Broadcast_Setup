@@ -473,8 +473,20 @@ for team→manufacturer), and `/hud/assets/{flags,brands}/<name>`
 serves bundled logos from `src/assets/`. The page polls `/hud/data` (no manual
 reloads); flags/brands resolve from text via `asset_key()`. Flags: `--no-hud`,
 `--overlay-tab`, `--config-tab`, `--hud-poll`, `--overlay-dir` (per-league override
-CSS/fonts, passed by the CLI when `profiles/<active>/overlay` exists). Tests:
-`tests/test_hud.py`.
+CSS/fonts, passed by the CLI when `profiles/<active>/overlay` exists). The optional
+**Quali Times** tab (`--quali-times-tab`, default `Quali Times`) adds each car's
+qualifying best lap. Its fetch is **off the HUD refresh path entirely**
+(`HudSource.refresh_quali`, called once at boot + by its own `quali_poller` thread every
+`QUALI_TIMES_POLL_S` = 60 s — the laps are entered once between qualifying and the race),
+so no quali-tab state can delay an on-air `refresh()` or a synchronous panel-push confirm;
+`refresh()` only reads the last-good map. A fetch/parse failure keeps that **last-good**
+map (never rolled back to empty) and warns once, an
+existing tab whose header was renamed/removed replaces the map with empty, and a league
+that never created the tab simply stays empty. A lap is matched per **car**: the verbatim
+`Team` cell first, then the `#NNN`-stripped name, so two cars of one team keep their own
+lap while a bare row still matches every car. The Configuration tab's `BG Color`/`Text
+Color` columns surface as `teams[].bgColor`/`textColor`, and `/hud/data` also carries the
+relay's `mode`. Tests: `tests/test_hud.py`.
 
 The panel's **sheet controls** write back through one Apps Script webhook
 (`RACECAST_SHEET_PUSH_URL`, injected by the CLI from the active profile's

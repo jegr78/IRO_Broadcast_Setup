@@ -1062,6 +1062,15 @@ DEFAULT_POV_TAB = "POV"
 # the Schedule tab (URL/Streamer/Stint). It is a single stream served on Feed A;
 # the relay switches its active schedule between race and qualifying (issue #124).
 DEFAULT_QUALIFYING_TAB = "Qualifying"
+# Quali Times tab (issue #555): per-car best lap shown in the race tiles. A
+# SEPARATE tab from DEFAULT_QUALIFYING_TAB above, which is the qualifying
+# SCHEDULE (URL/Streamer/Stint) — the two must never share a name.
+DEFAULT_QUALI_TIMES_TAB = "Quali Times"
+# How often the Quali Times tab is re-read, on its OWN thread (quali_poller) and
+# entirely off the HUD refresh path. The laps are entered once between qualifying
+# and the race, so a slow cadence is plenty -- and because nothing on air waits for
+# this fetch, a failing request costs nothing that matters (hence no backoff).
+QUALI_TIMES_POLL_S = 60
 
 # ---------- Network bind resolution (auto dual-bind: localhost + Tailscale) ----
 # OBS always reaches the control/HUD server on 127.0.0.1 (a fixed, machine-
@@ -1713,18 +1722,113 @@ def _crew_truthy(v):
     return (v or "").strip().lower() in CREW_TRUTHY
 
 
+# Optional per-team tile colours (issue #555): a flat background + text colour per
+# car, published by the HUD as --team-bg/--team-fg and consumed by a profile's
+# overlay CSS. Header-located like every other Configuration column, so positions
+# stay free; absent column or blank cell -> "" and the profile's CSS fallback wins.
+TEAM_BG_COLOR_HEADERS = ("bg color", "bg colour", "background color",
+                         "background colour")
+TEAM_TEXT_COLOR_HEADERS = ("text color", "text colour", "fg color", "fg colour")
+
+# A plausible CSS colour token: #rgb/#rgba/#rrggbb/#rrggbbaa, an
+# rgb()/rgba()/hsl()/hsla() function, or a bare keyword. Anything else -> "". This
+# is the gate that keeps a sheet cell from smuggling a url() (a resource fetch)
+# into the custom property the HUD sets on its slots — the sheet is admin-managed,
+# but the overlay renders on air and a typo must never turn into a network request.
+# Letters are allowed INSIDE the function form so unit/keyword arguments pass
+# (`hsl(120deg 50% 50%)`, `rgb(0 0 0 / 50%)`); that keeps the security property
+# intact because the character class admits no parenthesis, semicolon, colon or
+# quote — so an accepted value can never nest a functional notation like url() nor
+# escape the custom-property value into a second declaration.
+CSS_COLOR_RE = re.compile(
+    r"^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})"
+    r"|(?:rgb|hsl)a?\([0-9a-z.,%\s/]+\)"
+    r"|[a-z]{3,20})$", re.I)
+
+
+def sanitize_css_color(v):
+    """A sheet colour cell -> a safe CSS colour string, or '' when implausible."""
+    s = (v or "").strip()
+    return s if CSS_COLOR_RE.match(s) else ""
+
+
+# Quali Times tab (issue #555): Team | Best Lap, one row per car, maintained ONCE
+# between qualifying and the race. Deliberately NOT the 'Qualifying' tab — that
+# name is the qualifying SCHEDULE (DEFAULT_QUALIFYING_TAB).
+# The lap header is deliberately NARROW: a bare "quali"/"lap" alias would happily
+# match an unrelated column (a fallback CSV, a renamed tab) and put plausible-
+# looking garbage on air as a lap time.
+QUALI_TEAM_HEADERS = ("team", "teams", "team name")
+QUALI_LAP_HEADERS = ("best lap", "best-lap", "bestlap", "quali time")
+
+# A best lap a Sheets duration format produced ('0:01:38.973'): the hours group is
+# dropped when zero, so the HUD shows the broadcast form '1:38.973'.
+QUALI_LAP_DURATION_RE = re.compile(r"^(\d{1,2}):(\d{1,2}):(\d{2}(?:\.\d+)?)$")
+
+
+def normalize_quali_lap(v):
+    """A 'Best Lap' cell -> the HUD display string. Verbatim except two
+    deterministic fixes: a comma decimal becomes a dot, and a ZERO hours group
+    from a Sheets duration-formatted cell is dropped ('0:01:38,973' ->
+    '1:38.973'). A non-zero hour is left alone — implausible for a lap, but
+    showing the cell beats silently destroying it. No conversion to seconds and
+    no reformatting: the sheet stays WYSIWYG, like every other HUD text field."""
+    s = (v or "").strip().replace(",", ".")
+    mt = QUALI_LAP_DURATION_RE.match(s)
+    if mt and not mt.group(1).strip("0"):
+        return f"{int(mt.group(2))}:{mt.group(3)}"
+    return s
+
+
+def parse_quali_times(text):
+    """Quali Times tab CSV -> {asset_key: display_lap}. Each row registers TWO
+    keys, mirroring the two-step lookup the roster already uses (see
+    parse_config_roster / team_entry): the asset_key of the VERBATIM cell (e.g.
+    'scuderia-adriatica-motorsport-14' — the per-CAR identity) and the asset_key of
+    the STRIPPED team name ('scuderia-adriatica-motorsport' — the whole team). So a
+    sheet that spells out '#14' and '#54' gives each car its own lap, while a sheet
+    that writes only the bare team name still matches every car of that team.
+    Both keys are setdefault'ed, so a generic row can never overwrite a specific
+    one; on an identical key the FIRST row wins. Columns are located by header
+    name; a missing tab, missing header, or either column absent -> {}, so a league
+    without this tab is simply unaffected."""
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        return {}
+    header = [(h or "").strip().lower() for h in rows[0]]
+    ti = next((header.index(h) for h in QUALI_TEAM_HEADERS if h in header), None)
+    li = next((header.index(h) for h in QUALI_LAP_HEADERS if h in header), None)
+    if ti is None or li is None:
+        return {}
+    out = {}
+    for row in rows[1:]:
+        if len(row) <= ti or len(row) <= li:
+            continue
+        raw = (row[ti] or "").strip()
+        name, _embedded = split_team_label(raw)
+        lap = normalize_quali_lap(row[li])
+        if not lap:
+            continue
+        for key in (asset_key(raw), asset_key(name)):
+            if key:
+                out.setdefault(key, lap)
+    return out
+
+
 def parse_config_roster(text):
     """Configuration tab CSV -> roster {team_label: {"number": str, "brandKey": str,
-    "brandName": str}}. The dict KEY is the VERBATIM team label (e.g.
-    'Scuderia #14'), so two cars sharing a name but differing in number stay
-    distinct entries — the stripped name is NOT a unique identity. The embedded
-    '#NNN' is peeled off only to derive the fallback car number (split_team_label);
-    the displayed name is stripped later, at HUD render time. brandName = the
-    "Brand Name Override" cell or, when blank, the verbatim brand text; brandKey
-    (the logo) is always asset_key(brand) regardless. The Number column wins over
-    the embedded token, which is only the fallback. Columns are located by header
-    name so positions stay free. A missing team-name header -> {}. A missing
-    Brand/Number column just yields '' for that field."""
+    "brandName": str, "bgColor": str, "textColor": str}}. The dict KEY is the
+    VERBATIM team label (e.g. 'Scuderia #14'), so two cars sharing a name but
+    differing in number stay distinct entries — the stripped name is NOT a unique
+    identity. The embedded '#NNN' is peeled off only to derive the fallback car
+    number (split_team_label); the displayed name is stripped later, at HUD render
+    time. brandName = the "Brand Name Override" cell or, when blank, the verbatim
+    brand text; brandKey (the logo) is always asset_key(brand) regardless. The
+    Number column wins over the embedded token, which is only the fallback.
+    bgColor/textColor are the optional per-team tile colours (sanitize_css_color'd,
+    "" when unset or implausible). Columns are located by header name so positions
+    stay free. A missing team-name header -> {}. A missing Brand/Number/colour
+    column just yields '' for that field."""
     rows = list(csv.reader(io.StringIO(text)))
     if not rows:
         return {}
@@ -1735,6 +1839,8 @@ def parse_config_roster(text):
     bi = next((header.index(h) for h in BRAND_TEXT_HEADERS if h in header), None)
     oi = next((header.index(h) for h in BRAND_NAME_OVERRIDE_HEADERS if h in header), None)
     ni = next((header.index(h) for h in NUMBER_HEADERS if h in header), None)
+    ci = next((header.index(h) for h in TEAM_BG_COLOR_HEADERS if h in header), None)
+    fi = next((header.index(h) for h in TEAM_TEXT_COLOR_HEADERS if h in header), None)
     out = {}
     for row in rows[1:]:
         if len(row) <= ti:
@@ -1748,7 +1854,11 @@ def parse_config_roster(text):
         override = (row[oi].strip() if oi is not None and len(row) > oi else "")
         out[label] = {"number": col_num or embedded,
                       "brandKey": asset_key(brand_raw),
-                      "brandName": override or brand_raw}
+                      "brandName": override or brand_raw,
+                      "bgColor": sanitize_css_color(
+                          row[ci] if ci is not None and len(row) > ci else ""),
+                      "textColor": sanitize_css_color(
+                          row[fi] if fi is not None and len(row) > fi else "")}
     return out
 
 
@@ -1847,27 +1957,37 @@ def _parse_preset_column(text, headers):
     return out
 
 
-def team_entry(raw, roster):
-    """One /hud/data team object from an Overlay slot value + the roster. The
-    roster is keyed by the VERBATIM label, so the lookup uses the raw slot value
-    first (the per-car identity); a stripped-name fallback covers a bare slot
-    value against a roster whose number lives in a separate Number column.
-    Displayed 'name' is the stripped form; 'number'/logo come from the roster
-    (Number column precedence already baked in), with the slot's own embedded
-    #NNN as the fallback. 'label' carries the verbatim value (with #NNN) so the
-    panel dropdown can offer/select the exact car — the HUD ignores it."""
+def team_entry(raw, roster, quali=None):
+    """One /hud/data team object from an Overlay slot value + the roster (+ the
+    optional Quali Times map). The roster is keyed by the VERBATIM label, so the
+    lookup uses the raw slot value first (the per-car identity); a stripped-name
+    fallback covers a bare slot value against a roster whose number lives in a
+    separate Number column. Displayed 'name' is the stripped form;
+    'number'/logo come from the roster (Number column precedence already baked
+    in), with the slot's own embedded #NNN as the fallback. 'label' carries the
+    verbatim value (with #NNN) so the panel dropdown can offer/select the exact
+    car — the HUD ignores it. bgColor/textColor are the optional tile colours.
+    qualiLap uses the SAME two-step lookup as the roster: the verbatim label first
+    (so two cars of one team keep their own lap) and the stripped name as the
+    fallback (so a bare Quali Times row matches every car of that team, and
+    number/spelling variants between the two tabs still line up) — issue #555."""
     raw = (raw or "").strip()
     name, embedded = split_team_label(raw)
     info = roster.get(raw) or roster.get(name) or {}
+    quali = quali or {}
     return {"name": name,
             "number": info.get("number") or embedded,
             "brandKey": info.get("brandKey", ""),
             "brandName": info.get("brandName", ""),
-            "label": raw}
+            "label": raw,
+            "bgColor": info.get("bgColor", ""),
+            "textColor": info.get("textColor", ""),
+            "qualiLap": quali.get(asset_key(raw)) or quali.get(asset_key(name)) or ""}
 
 
-def build_hud_data(overlay, roster):
-    """Combine an Overlay map + roster {team: {number, brandKey, brandName}} into /hud/data."""
+def build_hud_data(overlay, roster, quali=None):
+    """Combine an Overlay map + roster {team: {number, brandKey, brandName,
+    bgColor, textColor}} + the optional Quali Times map into /hud/data."""
     return {
         "stint": overlay.get("stint", ""),
         "streamer": overlay.get("streamer", ""),
@@ -1877,7 +1997,8 @@ def build_hud_data(overlay, roster):
             "country": overlay.get("country", ""),
             "flagKey": asset_key(overlay.get("country", "")),
         },
-        "teams": [team_entry(n, roster) for n in overlay.get("teams", ["", "", ""])],
+        "teams": [team_entry(n, roster, quali)
+                  for n in overlay.get("teams", ["", "", ""])],
         "raceControl": overlay.get("race_control", ""),
         "flag": overlay.get("flag", ""),
     }
@@ -5077,17 +5198,30 @@ class CrewSource:
 OVERRIDE_TTL = 30  # s: unconfirmed panel write -> HUD falls back to sheet truth
 
 
+# The team-entry key set, spelled once. EMPTY and the override padding build
+# directly from it (a placeholder has no live values to compute, so there is
+# nothing to join). The one constructor that DOES join live values -- roster
+# lookup + quali lookup -- is team_entry; HudSource.resolve_team delegates to
+# it instead of duplicating that join, so a new field needs adding in exactly
+# two places (this literal, and team_entry's return dict), never three or four
+# (a forgotten key there would blank a tile for the 30 s of an optimistic echo
+# -- the bug that made the suite red between 805b1627 and b50fc381).
+EMPTY_TEAM_ENTRY = {"name": "", "number": "", "brandKey": "", "brandName": "",
+                    "label": "", "bgColor": "", "textColor": "", "qualiLap": ""}
+
+
 class HudSource:
     """Reads the Overlay + Configuration tabs and serves the /hud/data dict
     with last-good caching (mirrors ScheduleSource robustness)."""
     EMPTY = {"stint": "", "streamer": "", "session": "",
              "round": {"top": "", "country": "", "flagKey": ""},
-             "teams": [{"name": "", "number": "", "brandKey": "", "brandName": "", "label": ""} for _ in range(3)],
+             "teams": [dict(EMPTY_TEAM_ENTRY) for _ in range(3)],
              "raceControl": "", "flag": ""}
 
-    def __init__(self, overlay_url, config_url, cache_path):
+    def __init__(self, overlay_url, config_url, cache_path, quali_url=None):
         self.overlay_url = overlay_url
         self.config_url = config_url
+        self.quali_url = quali_url      # None = no Quali Times tab configured
         self.cache_path = cache_path
         self.lock = threading.Lock()
         self._data = None
@@ -5096,6 +5230,8 @@ class HudSource:
         self._rc_note_presets = []
         self._roster = {}
         self._roster_full = {}   # stripped team name -> verbatim Configuration label
+        self._quali = {}
+        self._quali_warned = False
         self.overrides = {}   # hud-data key -> (value, expires_ts)
         self.team_overrides = {}   # slot index 0..2 -> (entry_dict, expires_ts)
         self.last_ok = None
@@ -5115,8 +5251,49 @@ class HudSource:
         except (OSError, ValueError):
             self._data = None
 
-    def refresh(self, timeout=10):
+    def refresh_quali(self, timeout=10):
+        """Fetch + parse the OPTIONAL Quali Times tab (issue #555) and commit the
+        map. Deliberately NOT part of refresh(): quali times are entered once
+        between qualifying and the race, so they need none of the HUD's 5 s
+        freshness — and keeping the fetch out of refresh() is what guarantees that
+        no quali-tab state (missing, present, or unreachable) can ever add a round
+        trip to an on-air HUD refresh or to the synchronous panel-push confirm that
+        clears an optimistic override. Its own slow thread calls this (see
+        quali_poller / QUALI_TIMES_POLL_S), plus once at boot.
+
+        Returns True on a successful fetch+parse, False on failure or when no tab
+        is configured. Never raises. A failure keeps the LAST-GOOD map (never
+        rolled back to empty) and warns once per relay run; a success resets that
+        gate, so a later, DIFFERENT failure (e.g. a parse error after a sheet-format
+        change) still warns."""
+        if not self.quali_url:
+            return False
         try:
+            quali = parse_quali_times(self._fetch(self.quali_url, timeout))
+        except Exception as e:
+            if not self._quali_warned:
+                LOG.warning("quali times unavailable (%s: %s) — keeping the last "
+                            "known lap times", type(e).__name__, e)
+                self._quali_warned = True
+            return False
+        with self.lock:
+            self._quali = quali
+            self._quali_warned = False
+        return True
+
+    def refresh(self, timeout=10):
+        # No quali-tab work happens here -- not a fetch, not a parse (issue #555):
+        # this method runs every --hud-poll seconds AND synchronously after every
+        # panel write, so nothing optional may sit on it. It only READS the
+        # last-good map that refresh_quali() commits.
+        #
+        # Total by construction: the poll thread calls refresh() bare, so an
+        # escaping exception would freeze the on-air overlay on last-good data for
+        # the rest of the relay run. Every parse/build step therefore stays inside
+        # the guarded try; a failure sets last_error and returns False.
+        try:
+            with self.lock:
+                quali = self._quali          # last-good; committed by refresh_quali
             overlay = parse_overlay(self._fetch(self.overlay_url, timeout))
             config_text = self._fetch(self.config_url, timeout)
             roster = parse_config_roster(config_text)
@@ -5124,12 +5301,14 @@ class HudSource:
             vocab = parse_config_vocab(config_text)
             cue_presets = parse_cue_presets(config_text)
             rc_note_presets = parse_rc_note_presets(config_text)
-            data = build_hud_data(overlay, roster)
+            data = build_hud_data(overlay, roster, quali)
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             return False
         with self.lock:
             self._data = data
+            # NB: self._quali is NOT written here -- refresh_quali() owns it, so a
+            # commit from its thread is never rolled back by an in-flight refresh.
             self._vocab = vocab
             self._cue_presets = cue_presets
             self._rc_note_presets = rc_note_presets
@@ -5179,7 +5358,7 @@ class HudSource:
             if self.team_overrides:
                 teams = [dict(t) for t in out.get("teams", [])]
                 while len(teams) < 3:
-                    teams.append({"name": "", "number": "", "brandKey": "", "brandName": "", "label": ""})
+                    teams.append(dict(EMPTY_TEAM_ENTRY))
                 for s, (e, _exp) in self.team_overrides.items():
                     if 0 <= s < len(teams):
                         teams[s] = dict(e)
@@ -5203,20 +5382,23 @@ class HudSource:
         with self.lock:
             return list(self._roster.keys())
 
+    def quali_times(self):
+        """The Quali Times map {asset_key: lap}, last-good (empty when the tab is
+        absent/unreachable)."""
+        with self.lock:
+            return dict(self._quali)
+
     def resolve_team(self, label):
         """A /hud/data team entry for a roster label (the verbatim '#NNN' value the
-        panel dropdown sends) or an unknown label. Looks up the verbatim label
-        first (per-car identity), then a stripped-name fallback; the entry carries
-        the verbatim 'label' back for the panel's optimistic echo."""
-        label = (label or "").strip()
-        name, embedded = split_team_label(label)
+        panel dropdown sends) or an unknown label. Delegates to team_entry --
+        the same join a live Overlay slot value gets (verbatim-label-first
+        lookup, then a stripped-name fallback, the verbatim 'label' riding
+        along for the panel's optimistic echo) -- so the two constructors can
+        never drift apart. Only the roster/quali snapshot is taken under the
+        lock; the join itself runs lock-free."""
         with self.lock:
-            info = self._roster.get(label) or self._roster.get(name) or {}
-        return {"name": name,
-                "number": info.get("number") or embedded,
-                "brandKey": info.get("brandKey", ""),
-                "brandName": info.get("brandName", ""),
-                "label": label}
+            roster, quali = dict(self._roster), dict(self._quali)
+        return team_entry(label, roster, quali)
 
     def full_team_name(self, name):
         """The verbatim Configuration team label (e.g. 'OVO eSports #111') to write
@@ -8410,6 +8592,10 @@ def make_handler(relay, panel_path=None, hud_source=None, hud_path=None, assets_
                     data = hud_source.data()           # already a shallow copy
                     data["povActive"] = relay.pov_active()
                     data["povName"] = relay.pov_name()
+                    # Race vs qualifying, so a profile's overlay CSS can gate on
+                    # body[data-mode] (issue #555). Relay state, like povActive —
+                    # deliberately not part of HudSource.
+                    data["mode"] = relay.mode
                     return self._send(data)
                 if p == ["hud", "preview"]:
                     if not preview_path:
@@ -9291,8 +9477,29 @@ def make_handler(relay, panel_path=None, hud_source=None, hud_path=None, assets_
 
 
 def poller(source, interval, stop_evt):
+    # Guarded: refresh() is written to be total, but if one ever escaped, an
+    # unguarded loop would die and leave the source frozen on last-good data for
+    # the rest of the relay run -- silently, which is the expensive part (a frozen
+    # on-air overlay with nothing in the log). Log it and keep polling instead.
     while not stop_evt.wait(interval):
-        source.refresh()
+        try:
+            source.refresh()
+        except Exception as e:
+            LOG.warning("sheet poll raised (%s: %s) — continuing",
+                        type(e).__name__, e)
+
+
+def quali_poller(hud_source, interval, stop_evt):
+    """Re-read the optional Quali Times tab on its own SLOW cadence, off the HUD
+    refresh path entirely (issue #555): no quali-tab state may delay an on-air HUD
+    refresh or a panel-push confirm. refresh_quali() never raises; the guard is
+    there so a future change cannot kill this thread unnoticed."""
+    while not stop_evt.wait(interval):
+        try:
+            hud_source.refresh_quali()
+        except Exception as e:
+            LOG.warning("quali times poll raised (%s: %s) — continuing",
+                        type(e).__name__, e)
 
 
 # ---------- GT7 UDP telemetry listener (solo/POV only, #324) ----------------
@@ -9480,6 +9687,9 @@ def main():
                     help="Google-Sheet tab with the live HUD values (default 'Overlay').")
     ap.add_argument("--config-tab", default="Configuration",
                     help="Google-Sheet tab with the team→brand map (default 'Configuration').")
+    ap.add_argument("--quali-times-tab", default=DEFAULT_QUALI_TIMES_TAB,
+                    help="Google-Sheet tab with per-car qualifying best laps "
+                         "(default 'Quali Times'). Absent tab = blank lap slots.")
     ap.add_argument("--hud-poll", type=int, default=5,
                     help="HUD sheet refresh interval in seconds (default 5).")
     ap.add_argument("--no-hud", action="store_true",
@@ -9749,8 +9959,18 @@ def main():
         base = f"https://docs.google.com/spreadsheets/d/{args.sheet_id}/gviz/tq?tqx=out:csv&sheet="
         overlay_url = base + quote(args.overlay_tab)
         config_url = base + quote(args.config_tab)
+        quali_url = base + quote(args.quali_times_tab)
         hud_cache = os.path.join(runtime, "hud.cache.json")
-        hud_source = HudSource(overlay_url, config_url, hud_cache)
+        hud_source = HudSource(overlay_url, config_url, hud_cache,
+                               quali_url=quali_url)
+        # The optional Quali Times tab (issue #555) is read ONCE here and then only
+        # by its own slow thread (quali_poller, below) -- never on the HUD refresh
+        # path. Non-fatal, like the POV/crew boot reads: an absent or unreachable
+        # tab just leaves the lap slots blank. It runs BEFORE the first refresh()
+        # so the very FIRST built HUD frame already carries the laps -- refresh()
+        # reads the committed map, and doing it in this order needs no second
+        # lap-join site to achieve that.
+        hud_source.refresh_quali()
         hud_source.refresh()   # non-fatal: keeps last-good / empty if unreachable
         for cand in (os.path.join(here, "hud.html"),
                      os.path.join(here, "..", "hud.html"),
@@ -9871,6 +10091,13 @@ def main():
                          daemon=True).start()
     if hud_source:
         threading.Thread(target=poller, args=(hud_source, args.hud_poll, stop_evt),
+                         daemon=True).start()
+    if hud_source and hud_source.quali_url:
+        # Quali Times on its own slow thread (issue #555): entered once between
+        # qualifying and the race, so QUALI_TIMES_POLL_S — never args.hud_poll, and
+        # never inline in the HUD refresh, which must stay free of it.
+        threading.Thread(target=quali_poller,
+                         args=(hud_source, QUALI_TIMES_POLL_S, stop_evt),
                          daemon=True).start()
     if timer_store and timer_store.csv_url:
         threading.Thread(target=poller, args=(timer_store, args.hud_poll, stop_evt),

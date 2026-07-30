@@ -55,7 +55,7 @@ exposes these ids:
 | `#round-top` | the round header |
 | `#round-flag` | the round country flag image |
 | `#round-country` | the round country text |
-| `#team0` `#team1` `#team2` | the three team rows (each holds a logo image + a `.name` span) |
+| `#team1-…` `#team2-…` `#team3-…` | the three podium tiles — each is a group of independent slots: `-bar` (colour bar), `-logo` (brand logo image), `-num` (car number), `-name` (team name), `-brand` (brand/model text), `-quali` (qualifying best lap) |
 | `#race-control` | the race-control line |
 | `#clock` | the race-timer digits (merged into the HUD) |
 | `#pov` | the POV picture-in-picture frame (position + background/border) |
@@ -63,6 +63,32 @@ exposes these ids:
 
 The POV box (frame + name) is shown only while the POV PiP is toggled on (driven by the
 relay's `pov_shown`, via `/hud/data` `povActive`).
+
+## Team colours and qualifying lap
+
+Three more overrides, all optional and driven by Sheet data rather than columns in the
+table above:
+
+| Id / hook | Fed by | Meaning |
+|---|---|---|
+| `#team1-bar` `#team2-bar` `#team3-bar` | — | An empty box behind each tile's logo/number; the base HUD ships it with no background, a profile paints one |
+| `#team1-quali` `#team2-quali` `#team3-quali` | [Quali Times tab](Sheet-Template#quali-times-tab) | The car's qualifying best lap text |
+| `--team-bg` / `--team-fg` | Configuration tab `BG Color` / `Text Color` | Set on **every** slot of a tile (not just `-bar`), so one CSS rule colors the whole tile |
+| `body[data-mode="race"]` / `body[data-mode="qualifying"]` | the relay's live mode | Gate any rule on race vs. qualifying |
+
+```css
+#team1-bar, #team2-bar, #team3-bar { background: var(--team-bg, #000); }
+body[data-mode="qualifying"] #team1-quali { display: none; }
+```
+
+**Always give `var()` a fallback.** When a colour cell is blank or rejected the HUD
+removes the property entirely, so a bare `var(--team-bg)` becomes invalid and the bar
+renders **fully transparent** — the tile loses its chrome instead of degrading to a
+neutral. Blank is the normal state for every league that does not fill the columns.
+
+These publish data, not a new control surface — no panel field, no Companion button. The
+colours are static per league/team; the lap times are maintained once between qualifying
+and the race — see [Sheet-Template](Sheet-Template#quali-times-tab).
 
 ## Editing — the visual builder
 

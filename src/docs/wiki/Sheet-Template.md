@@ -103,6 +103,8 @@ A header row (row 1) plus one row per team. Columns are located **by header text
 | `Race Control` | optional | Dropdown options for the panel's **Race Control** field |
 | `Flag` | optional | Dropdown options for the panel/Companion **race-condition flag** (Green/Yellow/Safety Car/Full Course Yellow/Red/…). Shown color-coded in the HUD; hidden when unset. Distinct from the country flag (which derives from `Round Bottom`/Country) |
 | `Cue Preset` | optional | Quick-cue presets for the director text-cue channel |
+| `BG Color` *(or `BG Colour`/`Background Color`/`Background Colour`)* | optional | Per-team tile background colour — any plain CSS colour (`#C00000`, `rgb(0,80,160)`, `white`); implausible values are ignored |
+| `Text Color` *(or `Text Colour`/`FG Color`/`FG Colour`)* | optional | Per-team tile text colour, same rules as `BG Color` |
 
 Sample:
 
@@ -122,6 +124,10 @@ The canonical flag states ship default HUD colors: `Green Flag`, `Yellow Flag`,
 `Checkered Flag`. The abbreviations `FCY`/`VSC`/`SC` map onto those. Any other value
 renders in a neutral default style and can be colored per-league via the overlay
 `customCss`.
+
+`BG Color`/`Text Color` publish as the `--team-bg`/`--team-fg` custom properties on the
+HUD's team tiles — a per-league overlay decides what to do with them. See
+[HUD overlays](HUD-Overlays#team-colours-and-qualifying-lap).
 
 ---
 
@@ -163,6 +169,56 @@ least one sample row so the tab parses.
 URL                                          | Streamer           | Stint
 https://www.youtube.com/watch?v=SAMPLE0QUAL  | Sample Commentator | Qualifying
 ```
+
+---
+
+## Quali Times tab
+
+Optional. One row per car, giving that car's qualifying best lap for display on the race
+tiles — **not** the `Qualifying` tab above, which is the qualifying *schedule*
+(URL/Streamer/Stint). Maintained **once** between qualifying and the race; no live typing
+during the show.
+
+| Column header | Required? | Meaning |
+|---|---|---|
+| `Team` *(or `Teams` / `Team Name`)* | yes | Matched to a car by the **exact** label first, then by the team name with a trailing `#NNN` stripped. So `Tavernello Racing #6` and `Tavernello Racing` both match that car — and a team fielding **two** cars gives each its own lap by writing both rows with their numbers (`… #14`, `… #54`) |
+| `Best Lap` *(or `Best-Lap` / `Bestlap` / `Quali Time`)* | yes | The car's qualifying best lap |
+
+**Format the `Best Lap` column as plain text** (`Format → Number → Plain text`) before
+typing lap times — otherwise Google Sheets parses `1:38.973` as a duration (38.973
+*minutes*), and the CSV export the relay reads already carries the mangled value. A
+single already-mangled cell can be rescued with a leading apostrophe: `'1:38.973`.
+
+| Sheet cell | HUD shows |
+|---|---|
+| `1:38.973` | `1:38.973` |
+| `1:38,973` | `1:38.973` |
+| `0:01:38,973` | `1:38.973` |
+| `1:01:38.973` *(a non-zero hour)* | `1:01:38.973` — passed through unchanged; a >1h lap is nonsense, but showing the cell beats guessing |
+| *(empty, or team not found)* | *(lap slot stays hidden)* |
+
+Sample:
+
+```
+Team                   | Best Lap
+Tavernello Racing #6   | 1:38.973
+```
+
+Because the laps are entered once and never change during the show, the relay reads this
+tab on **its own slow cycle** (once at startup, then about once a minute) — completely
+separate from the HUD's own refresh. Nothing on air ever waits for it: whether the tab is
+missing, present, or unreachable, the lower third and the panel's write-confirmations
+carry on at full speed.
+
+This tab can fail to show a lap in three different ways, and the relay handles each
+differently:
+
+- **The tab was never created** — every lap slot stays empty; nothing was ever fetched.
+- **The tab exists, but the `Team` or `Best Lap` header is gone** (e.g. renamed or
+  deleted) — the whole map is replaced with empty, so every lap slot blanks.
+- **The fetch itself fails** (a transient network blip, or a tab that existed and was
+  removed mid-event) — the **last successfully fetched** lap times keep showing; the
+  relay logs a warning once and keeps retrying on the next cycle.
 
 ---
 

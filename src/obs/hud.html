@@ -67,6 +67,23 @@
   #team2-brand { left: 896px; top: 1064px; }
   #team3-brand { left: 1340px; top: 1064px; }
 
+  /* Tile colour bar + quali lap (issue #555). The bar is a plain box slot with
+     NO background in base — a profile paints it with var(--team-bg), which
+     setTeam() publishes from the sheet's per-team colours. It is the FIRST slot
+     of its tile in the DOM so it paints behind logo/number/name. The quali lap
+     shares the brand row's box but is right-aligned, so brand text (left) and
+     lap time (right) coexist on one line. Positions here are the provisional
+     default look; a league places them in the overlay builder. */
+  .team-bar { width: 391px; height: 60px; }
+  #team1-bar { left: 318px; top: 1006px; }
+  #team2-bar { left: 762px; top: 1006px; }
+  #team3-bar { left: 1206px; top: 1006px; }
+  .team-quali { height: 22px; width: 250px; font-size: 16px; color: #cfd6df;
+    justify-content: flex-end; overflow: hidden; white-space: nowrap; }
+  #team1-quali { left: 453px; top: 1064px; }
+  #team2-quali { left: 896px; top: 1064px; }
+  #team3-quali { left: 1340px; top: 1064px; }
+
   /* POV picture-in-picture frame (issue #141): aligned to the OBS "Feed POV"
      scene item (pos 1496,644, bounds 384x216). Transparent by default — set a
      background/border in the overlay builder to frame the PiP on air. */
@@ -257,18 +274,24 @@
   <div id="round-top" class="el white" data-edit="Round title" data-edit-kind="text"></div>
   <div id="round-flag" class="el" data-edit="Round flag" data-edit-kind="box"><img alt=""></div>
   <div id="round-country" class="el white" data-edit="Round country" data-edit-kind="text"></div>
+  <div id="team1-bar" class="el team-bar" data-edit="Team 1 bar" data-edit-kind="box"></div>
   <div id="team1-logo" class="el team-logo" data-edit="Team 1 logo" data-edit-kind="box" data-edit-props="align,valign"><img alt=""></div>
   <div id="team1-num" class="el team-num white" data-edit="Team 1 number" data-edit-kind="text"></div>
   <div id="team1-name" class="el team-name white" data-edit="Team 1 name" data-edit-kind="text" data-edit-props="teamNameMax,teamNameMin"></div>
   <div id="team1-brand" class="el team-brand white" data-edit="Team 1 brand name" data-edit-kind="text"></div>
+  <div id="team1-quali" class="el team-quali white" data-edit="Team 1 quali lap" data-edit-kind="text"></div>
+  <div id="team2-bar" class="el team-bar" data-edit="Team 2 bar" data-edit-kind="box"></div>
   <div id="team2-logo" class="el team-logo" data-edit="Team 2 logo" data-edit-kind="box" data-edit-props="align,valign"><img alt=""></div>
   <div id="team2-num" class="el team-num white" data-edit="Team 2 number" data-edit-kind="text"></div>
   <div id="team2-name" class="el team-name white" data-edit="Team 2 name" data-edit-kind="text" data-edit-props="teamNameMax,teamNameMin"></div>
   <div id="team2-brand" class="el team-brand white" data-edit="Team 2 brand name" data-edit-kind="text"></div>
+  <div id="team2-quali" class="el team-quali white" data-edit="Team 2 quali lap" data-edit-kind="text"></div>
+  <div id="team3-bar" class="el team-bar" data-edit="Team 3 bar" data-edit-kind="box"></div>
   <div id="team3-logo" class="el team-logo" data-edit="Team 3 logo" data-edit-kind="box" data-edit-props="align,valign"><img alt=""></div>
   <div id="team3-num" class="el team-num white" data-edit="Team 3 number" data-edit-kind="text"></div>
   <div id="team3-name" class="el team-name white" data-edit="Team 3 name" data-edit-kind="text" data-edit-props="teamNameMax,teamNameMin"></div>
   <div id="team3-brand" class="el team-brand white" data-edit="Team 3 brand name" data-edit-kind="text"></div>
+  <div id="team3-quali" class="el team-quali white" data-edit="Team 3 quali lap" data-edit-kind="text"></div>
   <div id="race-control" class="el white" data-edit="Race control" data-edit-kind="text"></div>
   <div id="flag-status" class="el" data-edit="Flag status" data-edit-kind="text"></div>
   <div id="pov" class="el" data-edit="POV box" data-edit-kind="box"></div>
@@ -321,7 +344,10 @@
   function fmtClock(s) {
     s = Math.max(0, Math.ceil(s));
     const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
-    return `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`;
+    const mm = h ? String(m).padStart(2, "0") : String(m);
+    // A zero hour is dropped (12:10, not 0:12:10) — short sessions read as
+    // mm:ss on air, and so does the final hour of a race (issue #555).
+    return (h ? h + ":" : "") + mm + ":" + String(x).padStart(2, "0");
   }
   function renderClock() {
     const el = document.getElementById("clock");
@@ -382,6 +408,26 @@
       el.style.fontSize = size + "px";
     }
   }
+  // Per-tile colours (issue #555) are published as CUSTOM PROPERTIES on the
+  // tile's own slots, so one generic profile rule serves all three tiles and no
+  // colour literal lives in the base HUD. Set via style.setProperty (never string
+  // concatenation into CSS text), so a sheet value cannot escape into a new
+  // declaration; the relay already rejects implausible colours server-side.
+  // KEEP IN SYNC with the teamN-* slot block in the markup above (the
+  // team1-bar … team1-quali divs, and their team2-/team3- twins): every part
+  // listed here gets --team-bg/--team-fg, and a tile slot missing from this list
+  // silently gets no colours. Add a 7th tile slot -> add its suffix here.
+  const TEAM_PARTS = ["bar", "logo", "num", "name", "brand", "quali"];
+  function setTeamColors(n, bg, fg) {
+    for (const part of TEAM_PARTS) {
+      const el = document.getElementById("team" + n + "-" + part);
+      if (!el) continue;
+      if (bg) el.style.setProperty("--team-bg", bg);
+      else el.style.removeProperty("--team-bg");
+      if (fg) el.style.setProperty("--team-fg", fg);
+      else el.style.removeProperty("--team-fg");
+    }
+  }
   function setTeam(i, team) {
     const n = i + 1;                 // slot ids are 1-based (team1..team3)
     const name = (team && team.name) || "";
@@ -396,6 +442,10 @@
     const brandName = (team && team.brandName) || "";
     brandEl.textContent = brandName;
     brandEl.classList.toggle("empty", !brandName);
+    setText("team" + n + "-quali", (team && team.qualiLap) || "");
+    // The bar is the tile's chrome: it follows the tile's presence, not one field.
+    document.getElementById("team" + n + "-bar").classList.toggle("empty", !name);
+    setTeamColors(n, (team && team.bgColor) || "", (team && team.textColor) || "");
     const logoEl = document.getElementById("team" + n + "-logo");
     const img = logoEl.querySelector("img");
     if (team && team.brandKey) { img.src = `/hud/assets/brands/${team.brandKey}`; logoEl.classList.remove("empty"); }
@@ -543,6 +593,10 @@
       const povOn = !!d.povActive;
       document.getElementById("pov").classList.toggle("empty", !povOn);
       setText("pov-name", povOn ? (d.povName || "") : "");
+      // Race vs qualifying for the profile CSS (e.g. hide the quali lap during
+      // qualifying itself). Absent/unknown -> attribute cleared.
+      if (d.mode) document.body.dataset.mode = d.mode;
+      else delete document.body.dataset.mode;
     } catch (e) { /* keep last good frame on transient errors */ }
   }
   tick();
