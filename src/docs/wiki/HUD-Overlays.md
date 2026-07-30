@@ -55,7 +55,7 @@ exposes these ids:
 | `#round-top` | the round header |
 | `#round-flag` | the round country flag image |
 | `#round-country` | the round country text |
-| `#team0` `#team1` `#team2` | the three team rows (each holds a logo image + a `.name` span) |
+| `#team1-…` `#team2-…` `#team3-…` | the three podium tiles — each is a group of independent slots: `-bar` (colour bar), `-logo` (brand logo image), `-num` (car number), `-name` (team name), `-brand` (brand/model text), `-quali` (qualifying best lap) |
 | `#race-control` | the race-control line |
 | `#clock` | the race-timer digits (merged into the HUD) |
 | `#pov` | the POV picture-in-picture frame (position + background/border) |
@@ -77,9 +77,14 @@ table above:
 | `body[data-mode="race"]` / `body[data-mode="qualifying"]` | the relay's live mode | Gate any rule on race vs. qualifying |
 
 ```css
-#team1-bar, #team2-bar, #team3-bar { background: var(--team-bg); }
+#team1-bar, #team2-bar, #team3-bar { background: var(--team-bg, #000); }
 body[data-mode="qualifying"] #team1-quali { display: none; }
 ```
+
+**Always give `var()` a fallback.** When a colour cell is blank or rejected the HUD
+removes the property entirely, so a bare `var(--team-bg)` becomes invalid and the bar
+renders **fully transparent** — the tile loses its chrome instead of degrading to a
+neutral. Blank is the normal state for every league that does not fill the columns.
 
 These publish data, not a new control surface — no panel field, no Companion button. The
 colours are static per league/team; the lap times are maintained once between qualifying

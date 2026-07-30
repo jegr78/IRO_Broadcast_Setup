@@ -74,9 +74,14 @@ capability that any profile can consume or ignore.
 |---|---|
 | `Tavernello Racing #6` | `1:38.973` |
 
-- Matched to a tile by `asset_key(stripped_team_name)` — `split_team_label` peels a trailing
-  `#NNN` first, so `Tavernello Racing #6`, `Tavernello Racing` and `tavernello racing` all
-  hit the same key. Robust against number/spelling variants, per the issue.
+- Matched to a tile by a **two-step** lookup, the same one the roster uses: the `asset_key`
+  of the **verbatim** cell first, then the `asset_key` of the `#NNN`-stripped name. So
+  `Tavernello Racing #6`, `Tavernello Racing` and `tavernello racing` all hit that car
+  (robust against number/spelling variants, per the issue) **and** a team fielding two cars
+  keeps two distinct laps when the sheet spells out both numbers.
+  *(Revised in review, 2026-07-30: the original single stripped key gave both cars of a
+  two-car team the same lap — the stripped name is not a unique identity, exactly as
+  `parse_config_roster` already documents.)*
 - Columns are located by header name (case-insensitive), like every other tab. A missing
   header, or a tab that was never created, yields no quali times; a *transient* fetch
   problem never blanks laps already loaded — see Core changes → 1 (Relay parsers + join).
@@ -126,11 +131,18 @@ worse than displaying it. No length or plausibility validation: the tile is a fi
   `build_hud_data(overlay, roster, quali=None)` (:1869) gain an **optional trailing
   argument**, so all existing callers and the nine `HudSource(...)` test call sites stay
   valid. New entry keys: `bgColor`, `textColor`, `qualiLap`.
-- `HudSource(overlay_url, config_url, cache_path, quali_url=None)` (:5088). The third fetch
-  sits in **its own `try/except`** inside `refresh` (:5118): `refresh` is otherwise
-  all-or-nothing, so an unreachable or non-existent `Quali Times` tab — the state of *every*
-  existing league — would fail the whole refresh and freeze the entire overlay on last-good
-  data. A fetch/parse failure keeps the **last-good** lap map (never rolled back to
+- `HudSource(overlay_url, config_url, cache_path, quali_url=None)` (:5088). The quali fetch
+  is **not part of `refresh` at all** — it lives in its own `HudSource.refresh_quali()`,
+  called once at boot and then by a dedicated daemon thread (`quali_poller`) every
+  `QUALI_TIMES_POLL_S` (60 s). `refresh` only *reads* the committed last-good map.
+  *(Revised in review, 2026-07-30: the original design put the fetch first inside `refresh`
+  with its own `try/except`. That isolated the failure but not the cost — `refresh` runs on
+  the `--hud-poll` loop AND synchronously after every panel write, so it added a
+  `docs.google.com` round trip to every on-air HUD poll and delayed the push confirm that
+  clears an optimistic override. Quali times are entered once between qualifying and the
+  race, so they need none of that freshness; the guarantee is now that no quali-tab state —
+  missing, present or unreachable — can delay a HUD refresh or a panel-push confirm.)*
+  A fetch/parse failure keeps the **last-good** lap map (never rolled back to
   empty) and logs once; a tab that exists but has lost its `Team`/`Best Lap` header
   replaces the map with empty; a tab that was never created simply stays empty. Either
   way, everything else refreshes normally.

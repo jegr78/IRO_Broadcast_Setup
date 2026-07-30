@@ -181,8 +181,8 @@ during the show.
 
 | Column header | Required? | Meaning |
 |---|---|---|
-| `Team` *(or `Teams` / `Team Name`)* | yes | Matched to a car by team name; a trailing `#NNN` is stripped, so `Tavernello Racing #6` and `Tavernello Racing` both hit the same car |
-| `Best Lap` *(or `Best-Lap` / `Bestlap` / `Quali Time` / `Quali` / `Lap`)* | yes | The car's qualifying best lap |
+| `Team` *(or `Teams` / `Team Name`)* | yes | Matched to a car by the **exact** label first, then by the team name with a trailing `#NNN` stripped. So `Tavernello Racing #6` and `Tavernello Racing` both match that car — and a team fielding **two** cars gives each its own lap by writing both rows with their numbers (`… #14`, `… #54`) |
+| `Best Lap` *(or `Best-Lap` / `Bestlap` / `Quali Time`)* | yes | The car's qualifying best lap |
 
 **Format the `Best Lap` column as plain text** (`Format → Number → Plain text`) before
 typing lap times — otherwise Google Sheets parses `1:38.973` as a duration (38.973
@@ -204,17 +204,21 @@ Team                   | Best Lap
 Tavernello Racing #6   | 1:38.973
 ```
 
+Because the laps are entered once and never change during the show, the relay reads this
+tab on **its own slow cycle** (once at startup, then about once a minute) — completely
+separate from the HUD's own refresh. Nothing on air ever waits for it: whether the tab is
+missing, present, or unreachable, the lower third and the panel's write-confirmations
+carry on at full speed.
+
 This tab can fail to show a lap in three different ways, and the relay handles each
 differently:
 
 - **The tab was never created** — every lap slot stays empty; nothing was ever fetched.
 - **The tab exists, but the `Team` or `Best Lap` header is gone** (e.g. renamed or
-  deleted) — the whole map is replaced with empty, so every lap slot blanks on the next
-  refresh.
+  deleted) — the whole map is replaced with empty, so every lap slot blanks.
 - **The fetch itself fails** (a transient network blip, or a tab that existed and was
   removed mid-event) — the **last successfully fetched** lap times keep showing; the
-  relay logs a warning once and keeps retrying, never freezing the rest of the HUD over
-  it.
+  relay logs a warning once and keeps retrying on the next cycle.
 
 ---
 
