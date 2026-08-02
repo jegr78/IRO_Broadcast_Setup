@@ -33,6 +33,11 @@ MIN_GLIBC_BINARY = (2, 38)
 WINGET_IDS = {"yt-dlp": "yt-dlp.yt-dlp", "streamlink": "Streamlink.Streamlink",
               "ffmpeg": "Gyan.FFmpeg", "deno": "DenoLand.Deno"}
 APT_PACKAGES = {"ffmpeg": "ffmpeg"}
+# Arch (pacman) is the opposite case from apt: all four tools are in the official
+# `extra` repo and current — streamlink there is 8.4.0, above the 8.2.0 the relay
+# needs — so NONE of the managed installs below apply and the repo does the work.
+PACMAN_PACKAGES = {"yt-dlp": "yt-dlp", "streamlink": "streamlink",
+                   "ffmpeg": "ffmpeg", "deno": "deno"}
 # deno, yt-dlp, and streamlink get managed installs on Linux, NOT apt:
 #   * deno / yt-dlp — no usable apt package (pinned binary downloads; see
 #     install_deno_binary / install_ytdlp_binary).
@@ -350,12 +355,16 @@ def min_os_error(libc_tuple, floor=MIN_GLIBC_TOOLS):
 
 
 def pick_manager(platform, which=shutil.which):
-    """Package manager for this platform, or None (-> manual guide)."""
+    """Package manager for this platform, or None (-> manual guide).
+    On Linux apt wins when both are present, so a Debian box that happens to carry
+    a pacman port keeps the path it has always used."""
     if platform.startswith("win"):
         return "winget" if which("winget") else None
     if platform == "darwin":
         return "brew" if which("brew") else None
-    return "apt" if which("apt-get") else None
+    if which("apt-get"):
+        return "apt"
+    return "pacman" if which("pacman") else None
 
 
 def missing_tools(which=shutil.which):
@@ -408,6 +417,17 @@ def install_commands(manager, tools, brew_path="brew", sudo=False):
         # VM) can't locate the packages otherwise (issue #408).
         return [pre + ["apt-get", "update"],
                 pre + ["apt-get", "install", "-y"] + pkgs]
+    if manager == "pacman":
+        pkgs = [PACMAN_PACKAGES[t] for t in tools if t in PACMAN_PACKAGES]
+        if not pkgs:
+            return []
+        pre = ["sudo"] if sudo else []
+        # Deliberately NOT `-Sy`: refreshing the package list without upgrading the
+        # system is Arch's partial-upgrade trap (new packages link against libraries
+        # the machine doesn't have yet). `-S --needed` installs against the existing
+        # database; if that database is stale pacman says "target not found", and
+        # the fix is the operator's own `pacman -Syu` — never ours to force.
+        return [pre + ["pacman", "-S", "--needed", "--noconfirm"] + pkgs]
     return []
 
 
@@ -430,10 +450,24 @@ def update_commands(manager, tools, brew_path="brew", sudo=False):
         # refresh the index before upgrading (issue #408, same reason as install)
         return [pre + ["apt-get", "update"],
                 pre + ["apt-get", "install", "-y", "--only-upgrade"] + pkgs]
+    if manager == "pacman":
+        # Nothing to emit. Upgrading individual packages on a rolling release IS
+        # the partial upgrade we must avoid, and the correct action — `pacman -Syu`
+        # — upgrades the whole machine, which is the operator's call and not a side
+        # effect of `install-tools --update`. main() prints that pointer instead.
+        return []
     return []
 
 
-def manual_guide(platform):
+def manual_guide(platform, manager=None):
+    if manager == "pacman":
+        pkgs = " ".join(PACMAN_PACKAGES[t] for t in TOOLS)
+        return ("Install manually:  sudo pacman -S --needed " + pkgs + "\n"
+                "  (if pacman reports 'target not found', its package list is stale —\n"
+                "   run `sudo pacman -Syu` first; never `pacman -Sy` on its own)\n"
+                "bandwidth speed test (Ookla CLI): the distro package `speedtest-cli`\n"
+                "  installs a DIFFERENT tool under the same name — remove it and take\n"
+                "  the Linux build from https://www.speedtest.net/apps/cli")
     if platform.startswith("win"):
         return ("Install manually with winget (one per line):\n"
                 + "\n".join(f"  winget install --id {WINGET_IDS[t]} -e" for t in TOOLS)
@@ -548,15 +582,21 @@ def main():
         if manager is None:
             sys.exit("No supported package manager found.\n" + manual_guide(sys.platform))
 
-    # apt needs root and (unlike winget/brew) won't prompt for it — prepend sudo
-    # on Linux when not already running as root.
-    sudo = manager == "apt" and hasattr(os, "geteuid") and os.geteuid() != 0
+    # apt/pacman need root and (unlike winget/brew) won't prompt for it — prepend
+    # sudo on Linux when not already running as root.
+    sudo = manager in ("apt", "pacman") and hasattr(os, "geteuid") and os.geteuid() != 0
     cmds = []
     if a.update:
         present = [t for t in TOOLS if t not in missing]
         if present:
             print("Updating installed tools:", ", ".join(present))
             cmds += update_commands(manager, present, brew_path=brew or "brew", sudo=sudo)
+        if manager == "pacman" and present:
+            # See update_commands(): a per-package upgrade would be the partial
+            # upgrade. Say so rather than silently doing nothing.
+            print("NOTE: on Arch these are repository packages — upgrade them with the")
+            print("      system:  sudo pacman -Syu   (a per-package upgrade would leave")
+            print("      the machine in a partial-upgrade state)")
     cmds += install_commands(manager, missing, brew_path=brew or "brew", sudo=sudo)
     # speedtest on Windows is a winget package; mac/Linux is a direct download
     # (handled after the command loop). Best-effort, never blocks the core tools.
@@ -648,7 +688,7 @@ def main():
             parts.append("Failed: " + "; ".join(failed))
         if still:
             parts.append("Still missing: " + ", ".join(still))
-        sys.exit("\n".join(parts) + "\n" + manual_guide(sys.platform))
+        sys.exit("\n".join(parts) + "\n" + manual_guide(sys.platform, manager))
     # Tools may sit in brew's prefix / the registry / the managed bin dir but not
     # THIS shell's PATH. (deno/speedtest resolve via the managed dir, which racecast
     # itself adds to PATH — so they don't trip the note.)
