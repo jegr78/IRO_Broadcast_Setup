@@ -6,7 +6,7 @@ Sheet's Assets tab, and classifiers turning raw facts into preflight Result
 lines. Reuses preflight's Result/report model and install_apps' path
 candidates. Spec: docs/superpowers/specs/2026-06-05-event-readiness-design.md.
 Tests: tests/test_event.py."""
-import csv, io, ntpath, os, shutil, subprocess, sys, time
+import csv, glob, io, ntpath, os, shutil, subprocess, sys, time
 
 # Plain sibling imports: scripts/ is on sys.path in repo+package mode (racecast.py
 # injects it; standalone tests insert it), and the frozen binary ships these
@@ -123,14 +123,42 @@ def launch_command(app, platform, env=None, exists=os.path.exists, which=shutil.
     return ([exe], None) if exe else None
 
 
-def launch_env(app, platform, env=None, exists=os.path.exists):
+def session_runtime_dir(env, uid, exists=os.path.exists):
+    """The XDG per-user runtime directory of the login session ('/run/user/<uid>'),
+    or '' when it cannot be established. An inherited XDG_RUNTIME_DIR always wins.
+    Explicit '/': a Linux-only path — os.path.join would inject a backslash on the
+    Windows CI runner (CLAUDE cross-platform-paths rule)."""
+    inherited = (env.get("XDG_RUNTIME_DIR") or "").rstrip("/")
+    if inherited:
+        return inherited
+    if uid is None:
+        return ""
+    cand = "/run/user/" + str(uid)
+    return cand if exists(cand) else ""
+
+
+def launch_env(app, platform, env=None, exists=os.path.exists, uid=None,
+               glob_paths=glob.glob):
     """Environment overrides for a headless GUI launch, or {} when none are
     needed. On Linux, launching a GUI app (obs/discord) from a shell with no
     DISPLAY (a bare SSH session) can't reach the autologin X session; point it
     there so `racecast event start` works over SSH without RustDesk.
-    RACECAST_DISPLAY overrides the display (default ':0'); XAUTHORITY is
-    discovered from the login user's ~/.Xauthority. A non-Linux platform, a
-    non-GUI app, or an already-set DISPLAY -> {} (leave the env untouched)."""
+    RACECAST_DISPLAY overrides the display (default ':0').
+
+    Three things are handed over, all rooted in the login session's runtime dir:
+    - XAUTHORITY, the X cookie. ~/.Xauthority first; on an SDDM/GDM host that file
+      does not exist and the cookie lives at $XDG_RUNTIME_DIR/xauth_* instead, so
+      fall back to that (without it OBS does not start at all over SSH on a
+      KDE/GNOME box). The glob is sorted so repeated runs pick the same file.
+    - XDG_RUNTIME_DIR, which is how PipeWire finds its socket
+      ($XDG_RUNTIME_DIR/pipewire-0) and how discord_rpc.ipc_candidates finds the
+      Discord IPC endpoint. Missing it costs the broadcast its Discord audio AND
+      the voice auto-join — both fail silently, with no error on any surface.
+    - DBUS_SESSION_BUS_ADDRESS, the session bus, when its socket is really there.
+
+    Nothing is invented: each variable is emitted only once the path behind it is
+    confirmed to exist. A non-Linux platform, a non-GUI app, or an already-set
+    DISPLAY (we are inside a real session) -> {} (leave the env untouched)."""
     env = os.environ if env is None else env
     if not platform.startswith("linux"):
         return {}
@@ -138,7 +166,10 @@ def launch_env(app, platform, env=None, exists=os.path.exists):
         return {}
     if env.get("DISPLAY"):
         return {}
+    if uid is None and hasattr(os, "getuid"):
+        uid = os.getuid()
     out = {"DISPLAY": env.get("RACECAST_DISPLAY") or ":0"}
+    runtime = session_runtime_dir(env, uid, exists)
     xauth = env.get("XAUTHORITY")
     if not xauth:
         home = env.get("HOME") or ""
@@ -147,8 +178,18 @@ def launch_env(app, platform, env=None, exists=os.path.exists):
         cand = home + "/.Xauthority" if home else ""
         if cand and exists(cand):
             xauth = cand
+    if not xauth and runtime:
+        matches = sorted(glob_paths(runtime + "/xauth_*"))
+        if matches:
+            xauth = matches[0]
     if xauth:
         out["XAUTHORITY"] = xauth
+    if runtime:
+        if not env.get("XDG_RUNTIME_DIR"):
+            out["XDG_RUNTIME_DIR"] = runtime
+        bus = runtime + "/bus"
+        if not env.get("DBUS_SESSION_BUS_ADDRESS") and exists(bus):
+            out["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + bus
     return out
 
 

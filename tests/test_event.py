@@ -385,6 +385,78 @@ def t_launch_env_noop_non_gui():
     assert m.launch_env("tailscale", "linux", {"HOME": "/h"}) == {}
 
 
+# --- session runtime dir: PipeWire audio + the Discord IPC socket live there ----------
+# A GUI app started over SSH without XDG_RUNTIME_DIR cannot reach PipeWire (its socket is
+# $XDG_RUNTIME_DIR/pipewire-0), so OBS' Application Audio Capture silently fails to create
+# and racecast's Discord voice auto-join finds no IPC endpoint. Both fail without an error
+# on any visible surface, so launch_env must supply the variable.
+
+def t_launch_env_fills_runtime_dir_and_dbus():
+    out = m.launch_env("obs", "linux", {"HOME": "/h"},
+                       exists=lambda p: p in ("/run/user/1000", "/run/user/1000/bus"),
+                       uid=1000, glob_paths=lambda pat: [])
+    assert out["XDG_RUNTIME_DIR"] == "/run/user/1000"
+    assert out["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/1000/bus"
+
+
+def t_launch_env_runtime_dir_without_dbus_socket():
+    # The runtime dir exists but carries no session bus -> set only what is real.
+    out = m.launch_env("obs", "linux", {"HOME": "/h"},
+                       exists=lambda p: p == "/run/user/1000",
+                       uid=1000, glob_paths=lambda pat: [])
+    assert out["XDG_RUNTIME_DIR"] == "/run/user/1000"
+    assert "DBUS_SESSION_BUS_ADDRESS" not in out
+
+
+def t_launch_env_keeps_inherited_runtime_dir():
+    # Already in the environment -> never overridden, and it is the search base.
+    out = m.launch_env("obs", "linux", {"HOME": "/h", "XDG_RUNTIME_DIR": "/run/user/42/"},
+                       exists=lambda p: p == "/run/user/42/bus",
+                       uid=1000, glob_paths=lambda pat: [])
+    assert "XDG_RUNTIME_DIR" not in out
+    assert out["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/42/bus"
+
+
+def t_launch_env_xauthority_from_runtime_dir():
+    # SDDM/GDM keep the X cookie in the runtime dir, NOT in ~/.Xauthority — without
+    # this fall-back OBS does not start at all over SSH on a KDE/GNOME box.
+    seen = []
+
+    def globber(pattern):
+        seen.append(pattern)
+        return ["/run/user/1000/xauth_ZZZZZZ", "/run/user/1000/xauth_AAAAAA"]
+
+    out = m.launch_env("obs", "linux", {"HOME": "/h"},
+                       exists=lambda p: p == "/run/user/1000",
+                       uid=1000, glob_paths=globber)
+    assert seen == ["/run/user/1000/xauth_*"]
+    # deterministic pick (sorted), so two runs never disagree
+    assert out["XAUTHORITY"] == "/run/user/1000/xauth_AAAAAA"
+
+
+def t_launch_env_home_xauthority_wins_over_runtime_dir():
+    out = m.launch_env("obs", "linux", {"HOME": "/h"},
+                       exists=lambda p: p in ("/h/.Xauthority", "/run/user/1000"),
+                       uid=1000, glob_paths=lambda pat: ["/run/user/1000/xauth_A"])
+    assert out["XAUTHORITY"] == "/h/.Xauthority"
+
+
+def t_launch_env_no_runtime_dir_at_all():
+    # Nothing discoverable -> exactly the pre-existing behaviour, no invented paths.
+    out = m.launch_env("obs", "linux", {"HOME": "/h"}, exists=lambda p: False,
+                       uid=1000, glob_paths=lambda pat: [])
+    assert out == {"DISPLAY": ":0"}
+
+
+def t_launch_env_builds_linux_paths_with_forward_slashes():
+    # CLAUDE cross-platform rule: these are fixed-OS Linux paths, so they must never
+    # be assembled with os.path.join (backslashes on the Windows CI runner).
+    out = m.launch_env("obs", "linux", {"HOME": "/h"},
+                       exists=lambda p: p in ("/run/user/1000", "/run/user/1000/bus"),
+                       uid=1000, glob_paths=lambda pat: [])
+    assert "\\" not in "".join(out.values())
+
+
 def _raises(fn, exc=ValueError):
     try:
         fn()
