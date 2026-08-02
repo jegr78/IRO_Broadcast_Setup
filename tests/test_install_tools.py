@@ -104,10 +104,63 @@ def t_install_streamlink_venv_needs_python():
         m.system_python = orig
 
 
+def t_pick_manager_pacman_on_arch():
+    # Arch has no apt-get; without pacman support install-tools used to abort with
+    # "No supported package manager found" and print an apt guide (issue #560).
+    only = lambda have: (lambda n: "/usr/bin/" + n if n == have else None)
+    assert m.pick_manager("linux", which=only("pacman")) == "pacman"
+    assert m.pick_manager("linux", which=only("apt-get")) == "apt"
+    assert m.pick_manager("linux", which=lambda n: None) is None
+    # A box carrying both (a pacman port on Debian) keeps its existing apt path.
+    assert m.pick_manager("linux", which=lambda n: "/usr/bin/" + n) == "apt"
+
+
+def t_install_commands_pacman_takes_all_four_from_the_repo():
+    # Unlike apt, Arch's repo versions are current enough for every tool, so
+    # nothing needs a managed install: one command, all four packages.
+    cmds = m.install_commands("pacman", ["yt-dlp", "streamlink", "ffmpeg", "deno"],
+                              sudo=True)
+    assert cmds == [["sudo", "pacman", "-S", "--needed", "--noconfirm",
+                     "yt-dlp", "streamlink", "ffmpeg", "deno"]]
+    assert all(t in m.PACMAN_PACKAGES for t in m.TOOLS)
+    assert m.install_commands("pacman", []) == []
+    # No `-Sy`: refreshing the db without upgrading it is Arch's partial-upgrade
+    # trap, and install-tools must never put a machine in that state.
+    assert not any("-Sy" in arg for cmd in cmds for arg in cmd)
+
+
+def t_install_commands_pacman_sudo_prefix():
+    # pacman needs root and does not prompt for it — same reason as apt.
+    assert m.install_commands("pacman", ["ffmpeg"], sudo=False)[0][0] == "pacman"
+    assert m.install_commands("pacman", ["ffmpeg"], sudo=True)[0][0] == "sudo"
+
+
+def t_update_commands_pacman_refuses_partial_upgrade():
+    # Upgrading single packages on a rolling release IS the partial upgrade.
+    # --update therefore emits no command; main() points at `pacman -Syu`.
+    assert m.update_commands("pacman", ["ffmpeg", "deno"]) == []
+
+
+def t_streamlink_not_managed_on_pacman():
+    # Arch ships streamlink 8.x, so the apt-only venv workaround stays off.
+    assert m.streamlink_needs_managed_install("pacman") is False
+    assert m.streamlink_needs_managed_install("apt") is True
+
+
 def t_manual_guide_mentions_deno_on_linux():
     assert "deno" in m.manual_guide("linux")
     assert "brew install" in m.manual_guide("darwin")
     assert "winget" in m.manual_guide("win32")
+
+
+def t_manual_guide_pacman_variant():
+    guide = m.manual_guide("linux", manager="pacman")
+    assert "pacman -S" in guide
+    assert "apt-get" not in guide          # the apt text is actively wrong on Arch
+    for tool in m.TOOLS:
+        assert tool in guide
+    # unchanged for everyone else
+    assert "apt-get" in m.manual_guide("linux")
 
 
 def t_windows_fresh_path_joins_registry_values():

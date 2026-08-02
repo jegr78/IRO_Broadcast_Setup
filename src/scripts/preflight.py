@@ -444,32 +444,15 @@ def apps_section(present, web=False):
 # The Discord audio source uses the obs-pipewire-audio-capture plugin on Linux
 # (pipewire_audio_application_capture — for native Discord AND the Discord-web
 # fallback). It is NOT part of OBS core, so it must be installed separately on
-# every Linux box, any architecture. Detect its .so in the known plugin dirs.
-PIPEWIRE_AUDIO_SO = "linux-pipewire-audio.so"
-_MULTIARCH = {"x86_64": "x86_64-linux-gnu", "amd64": "x86_64-linux-gnu",
-              "aarch64": "aarch64-linux-gnu", "arm64": "aarch64-linux-gnu"}
-
-
-def pipewire_audio_candidates(home, machine):
-    """Known filesystem locations of the obs-pipewire-audio-capture plugin .so on
-    Linux (pure — builds path strings only): the per-user manual install (dimtpap
-    release-tarball layout) plus the common distro/package plugin dirs.
-
-    These are fixed Linux (POSIX) paths, so build them with explicit forward
-    slashes — never os.path.join, which injects backslashes on the Windows test
-    runner and makes a passing-on-Linux test fail there (see CLAUDE.md / #97)."""
-    user = home.replace("\\", "/").rstrip("/") + "/.config/obs-studio/plugins/linux-pipewire-audio"
-    cands = [f"{user}/bin/64bit/{PIPEWIRE_AUDIO_SO}", f"{user}/bin/{PIPEWIRE_AUDIO_SO}"]
-    multiarch = _MULTIARCH.get((machine or "").lower())
-    for lib in ("/usr/lib", "/usr/local/lib", "/usr/lib64"):
-        cands.append(f"{lib}/obs-plugins/{PIPEWIRE_AUDIO_SO}")
-        if multiarch:
-            cands.append(f"{lib}/{multiarch}/obs-plugins/{PIPEWIRE_AUDIO_SO}")
-    return cands
-
-
-def pipewire_audio_present(candidates, exists=os.path.exists):
-    return any(exists(p) for p in candidates)
+# every Linux box, any architecture.
+#
+# Where its .so may live is owned by obs_pipewire_linux (the module that installs
+# it) so there is ONE list: preflight reads it, install-apps checks against it
+# before downloading a copy the machine may already have from a distro package.
+from obs_pipewire_linux import (          # noqa: E402  (grouped with its users)
+    pipewire_audio_candidates,
+    pipewire_audio_present,
+)
 
 
 def classify_pipewire_audio(platform_name, present):

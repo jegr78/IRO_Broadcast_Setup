@@ -120,6 +120,23 @@ def obs_plugins_dir(arch):
     return f"/usr/lib/{arch_triplet(arch)}/obs-plugins"
 
 
+# Distros disagree on where OBS plugins live: Debian/Ubuntu use a multiarch
+# triplet, Arch (and other non-multiarch distros) a plain /usr/lib/obs-plugins.
+OBS_PLUGINS_DIR_PLAIN = "/usr/lib/obs-plugins"
+
+
+def obs_plugins_dirs(arch):
+    """Every directory a distro may place OBS plugins in, for presence checks.
+    Fixed-OS Linux paths — built with explicit '/' (CLAUDE.md cross-platform rule)."""
+    return [obs_plugins_dir(arch), OBS_PLUGINS_DIR_PLAIN]
+
+
+def browser_plugin_present(plugins_dirs, exists=os.path.exists):
+    """True iff obs-browser.so is in ANY of `plugins_dirs`. Checking only the
+    Debian path reported a missing Browser Source on distros that had one."""
+    return any(browser_plugin_installed(d, exists) for d in plugins_dirs)
+
+
 def browser_plugin_installed(plugins_dir, exists=os.path.exists):
     """True iff obs-browser.so is present in the OBS plugins dir. plugins_dir is a
     fixed-OS Linux path, so join with an explicit '/': os.path.join would inject a
@@ -137,6 +154,31 @@ def install_hint(machine, obs_present, browser_present):
         return None
     return ("OBS has no Browser Source plugin (needed for the relay HUD/timer "
             "overlays) — run `racecast obs-browser` to build & install it.")
+
+
+PACMAN_BROWSER_PACKAGE = "obs-studio-browser"
+
+
+def pacman_redirect_note(has_pacman, has_apt):
+    """Operator note for Arch-based hosts, or None when this isn't one.
+
+    Everything below (BUILD_APT_DEPS, _detect_obs_version's dpkg-query, the
+    Debian multiarch plugin path) is apt-specific: this command exists because
+    Debian/Ubuntu ship no browser plugin for aarch64 and there is nothing to
+    install. Arch is the opposite — a prebuilt CEF-enabled OBS is one package
+    away — so a source build here would be slow, unnecessary, and would fail
+    anyway. `has_apt` wins when both are present, mirroring
+    install_tools.pick_manager so one host never gets two answers."""
+    if not has_pacman or has_apt:
+        return None
+    return (
+        "On Arch the Browser Source comes as a package, not a source build.\n"
+        f"  sudo pacman -S {PACMAN_BROWSER_PACKAGE}\n"
+        "It replaces the plain obs-studio package (which is built without CEF, so "
+        "every Browser Source is missing and the relay's HUD/timer overlays stay "
+        "black). Verify afterwards with:\n"
+        f"  pacman -Ql {PACMAN_BROWSER_PACKAGE} | grep obs-browser.so\n"
+        "This command is for Debian/Ubuntu, where no prebuilt plugin exists.")
 
 
 def cef_configure_argv(cef_src, build_dir, arch):
@@ -232,6 +274,12 @@ def main(argv=None):
     if sys.platform != "linux":
         print("obs-browser source build is Linux-only "
               "(Windows/macOS OBS ship the Browser Source already).")
+        return 1
+    # Before any dpkg/apt work: on Arch this whole path is the wrong tool.
+    note = pacman_redirect_note(bool(shutil.which("pacman")),
+                                bool(shutil.which("apt-get")))
+    if note:
+        print(note)
         return 1
     arch = normalize_arch(platform.machine())
     spec = None

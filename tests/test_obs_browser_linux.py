@@ -121,6 +121,33 @@ def t_install_hint_only_when_missing_on_supported_arch():
     assert m.install_hint("armv7l", obs_present=True, browser_present=False) is None
 
 
+def t_pacman_hosts_get_the_package_not_a_source_build():
+    # This command is an apt/dpkg path end to end (BUILD_APT_DEPS, dpkg-query).
+    # On Arch it used to fail as "OBS Studio not detected" even with OBS running,
+    # because dpkg-query isn't there — while the real fix is a package swap.
+    note = m.pacman_redirect_note(has_pacman=True, has_apt=False)
+    assert note and m.PACMAN_BROWSER_PACKAGE in note
+    assert "pacman -S" in note
+    assert "apt" not in note.lower().replace("adapt", "")   # no apt advice on Arch
+    # Debian/Ubuntu (the intended audience) are untouched, and so is a box that
+    # carries both — apt wins there, exactly like install_tools.pick_manager.
+    assert m.pacman_redirect_note(has_pacman=False, has_apt=True) is None
+    assert m.pacman_redirect_note(has_pacman=True, has_apt=True) is None
+    assert m.pacman_redirect_note(has_pacman=False, has_apt=False) is None
+
+
+def t_browser_plugin_found_in_the_non_multiarch_dir_too():
+    # Debian puts OBS plugins under a multiarch triplet; Arch uses a plain
+    # /usr/lib/obs-plugins. Checking only the Debian path made install-apps
+    # report "no Browser Source" on a machine that had one.
+    dirs = m.obs_plugins_dirs("x86_64")
+    assert "/usr/lib/x86_64-linux-gnu/obs-plugins" in dirs
+    assert "/usr/lib/obs-plugins" in dirs
+    arch_only = lambda p: p == "/usr/lib/obs-plugins/obs-browser.so"
+    assert m.browser_plugin_present(dirs, exists=arch_only) is True
+    assert m.browser_plugin_present(dirs, exists=lambda p: False) is False
+
+
 # --- the PROJECT_ARCH fix is encoded in the CEF wrapper configure ---------
 def t_cef_configure_argv_sets_project_arch_on_aarch64():
     argv = m.cef_configure_argv("/src/cef", "/src/cef/build", "aarch64")

@@ -56,6 +56,44 @@ def plugin_installed(home, exists=os.path.exists):
     return exists(plugin_so_path(home))
 
 
+_MULTIARCH = {"x86_64": "x86_64-linux-gnu", "amd64": "x86_64-linux-gnu",
+              "aarch64": "aarch64-linux-gnu", "arm64": "aarch64-linux-gnu"}
+
+
+def pipewire_audio_candidates(home, machine):
+    """Every filesystem location the plugin .so may occupy on Linux (pure — builds
+    path strings only): the per-user manual install (this module's own layout, the
+    dimtpap release tarball) plus the distro/package plugin dirs. Debian uses a
+    multiarch triplet, Arch and others a plain /usr/lib/obs-plugins.
+
+    Fixed Linux (POSIX) paths, so build them with explicit forward slashes — never
+    os.path.join, which injects backslashes on the Windows test runner and makes a
+    passing-on-Linux test fail there (see CLAUDE.md / #97).
+
+    This lives here rather than in preflight because this module owns the install;
+    preflight imports it, so there is exactly one list."""
+    user = home.replace("\\", "/").rstrip("/") + "/.config/obs-studio/plugins/linux-pipewire-audio"
+    cands = [f"{user}/bin/64bit/{PLUGIN_SO}", f"{user}/bin/{PLUGIN_SO}"]
+    multiarch = _MULTIARCH.get((machine or "").lower())
+    for lib in ("/usr/lib", "/usr/local/lib", "/usr/lib64"):
+        cands.append(f"{lib}/obs-plugins/{PLUGIN_SO}")
+        if multiarch:
+            cands.append(f"{lib}/{multiarch}/obs-plugins/{PLUGIN_SO}")
+    return cands
+
+
+def pipewire_audio_present(candidates, exists=os.path.exists):
+    return any(exists(p) for p in candidates)
+
+
+def plugin_present(home, machine=None, exists=os.path.exists):
+    """True iff the plugin is present ANYWHERE OBS would load it from — the
+    per-user install AND the distro package dirs. Distro packages exist on Arch
+    (AUR) and elsewhere; judging only the per-user path made install-apps fetch a
+    second copy of a plugin the machine already had."""
+    return pipewire_audio_present(pipewire_audio_candidates(home, machine), exists)
+
+
 def is_prebuilt_arch(machine):
     """The release ships a 64bit (x86_64) .so only — no aarch64 prebuilt. Pure."""
     return (machine or "").lower() in _X86_64
