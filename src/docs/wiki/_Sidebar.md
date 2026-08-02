@@ -6,6 +6,7 @@
 **For operators**
 - [The Control Center](Control-Center)
 - [Set up the broadcast PC](Set-up-the-broadcast-PC)
+- [… on Arch Linux (CachyOS)](Arch-Linux)
 - [Run an event](Run-an-event)
 - [Remote producer (cloud GPU box)](Cloud-Producer)
 - [Director setup](Director-Setup)

@@ -31,6 +31,7 @@ flowchart LR
 
 - **What is the Control Center?** → [The Control Center](Control-Center)
 - **Setting up a machine for the first time?** → [Set up the broadcast PC](Set-up-the-broadcast-PC)
+  (on Arch, read [this supplement](Arch-Linux) alongside it — worked through on CachyOS)
 - **Running a show today?** → [Run an event](Run-an-event)
 - **Producing from a cloud GPU box?** → [Remote producer (cloud GPU box)](Cloud-Producer)
 - **You're the remote director?** → [Director setup](Director-Setup) (first

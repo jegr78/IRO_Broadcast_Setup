@@ -229,6 +229,11 @@ found).
 > `deno` is required — without it feeds fail with *"Sign in to confirm you're not a bot."*
 > Details: [Relay — how the feeds work](Relay-Mode).
 
+> **Arch Linux:** this command knows winget, Homebrew and apt — not pacman. It exits
+> with *"No supported package manager found"*. All four tools are in Arch's `extra`
+> repository; see [Arch Linux — the CachyOS example](Arch-Linux), which also covers
+> the OBS and Companion differences in the next step.
+
 <details>
 <summary>Alternative: install them manually</summary>
 
@@ -267,6 +272,11 @@ Linux (it lists the steps and asks before running them).
 > and install it from source (downloads ~340 MB of CEF, compiles for a few minutes). See
 > [OBS Setup](OBS-Setup) §4. On a no-GPU host also turn off Browser Source Hardware
 > Acceleration. This is ARM64-only; x86-64 Linux gets the Browser Source from the OBS PPA.
+
+> **Arch Linux:** pacman isn't supported here either, and two apps need different
+> handling — the plain `obs-studio` package has **no Browser Source** (the HUD and
+> timer stay black), and Companion is packaged nowhere. Both are covered in
+> [Arch Linux — the CachyOS example](Arch-Linux).
 
 <details>
 <summary>Alternative: install them manually</summary>
