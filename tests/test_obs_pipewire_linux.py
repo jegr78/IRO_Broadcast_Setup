@@ -133,6 +133,22 @@ def t_install_hint_paths():
     assert arm and ("aarch64" in arm or "no prebuilt" in arm.lower())
 
 
+def t_plugin_present_sees_a_system_wide_install():
+    # On Arch the plugin comes from the AUR and lands system-wide. Checking only
+    # the per-user dir made install-apps download a SECOND copy into ~/.config,
+    # leaving OBS with two builds of the same plugin. plugin_present() delegates
+    # to preflight's candidate list rather than keeping a second copy in sync.
+    home = "/home/u"
+    assert m.plugin_present(home, exists=lambda p: p == m.plugin_so_path(home)) is True
+    sys_so = "/usr/lib/obs-plugins/" + m.PLUGIN_SO
+    assert m.plugin_present(home, exists=lambda p: p == sys_so) is True
+    multiarch_so = "/usr/lib/x86_64-linux-gnu/obs-plugins/" + m.PLUGIN_SO
+    assert m.plugin_present(home, "x86_64", exists=lambda p: p == multiarch_so) is True
+    assert m.plugin_present(home, exists=lambda p: False) is False
+    # the narrow per-user check stays available and unchanged
+    assert m.plugin_installed(home, exists=lambda p: p == sys_so) is False
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):

@@ -415,7 +415,21 @@ def apps_update_guide():
             "               -o /tmp/discord.deb && sudo apt-get install -y /tmp/discord.deb")
 
 
-def apps_manual_guide(platform):
+def apps_manual_guide(platform, manager=None):
+    if manager == "pacman":
+        return "\n".join([
+            "Install the apps manually:",
+            "  OBS Studio — the CEF-enabled build, NOT plain obs-studio:",
+            f"    sudo pacman -S {PACMAN_APP_PACKAGES['obs']}",
+            "    (plain obs-studio has no Browser Source, so the HUD/timer stay black)",
+            "  Tailscale:",
+            f"    sudo pacman -S {PACMAN_APP_PACKAGES['tailscale']}",
+            "    sudo systemctl enable --now tailscaled && sudo tailscale up",
+            "  Discord:",
+            f"    sudo pacman -S {PACMAN_APP_PACKAGES['discord']}",
+            "  Companion — not packaged:",
+            "    " + PACMAN_COMPANION_NOTE.split(". ", 1)[-1],
+        ])
     lines = ["Install the apps manually:"]
     if platform not in ("darwin",) and not platform.startswith("win"):
         lines.append("  (Linux/WSL: install them on the HOST machine that runs OBS)")
@@ -486,6 +500,43 @@ def linux_install_steps(apps, which=shutil.which, machine=None):
     return steps
 
 
+# Arch (pacman). Three of the four apps are packaged; Companion is not — see
+# PACMAN_COMPANION_NOTE. `obs` deliberately maps to obs-studio-browser: the plain
+# obs-studio package is built WITHOUT CEF, so every Browser Source is missing and
+# the relay's HUD/timer overlays render black with no error anywhere.
+PACMAN_APP_PACKAGES = {"obs": "obs-studio-browser", "tailscale": "tailscale",
+                       "discord": "discord"}
+PACMAN_COMPANION_NOTE = (
+    "Companion is in no Arch repository and not in the AUR under a usable name "
+    "(`companion-satellite` is a different product). Install it by hand into the "
+    "companion-pi layout racecast controls — the wiki page 'Arch Linux — the "
+    "CachyOS example' has the exact steps, including the trap that "
+    "`racecast companion enable-control` must run BEFORE `companion start`.")
+
+
+def pacman_install_steps(apps):
+    """Ordered (kind, ...) steps to install `apps` with pacman — same step shapes
+    as linux_install_steps so _install_linux can execute either plan.
+
+    Repository packages go in ONE `pacman -S` call. Deliberately no `-Sy`:
+    refreshing the package list without upgrading the system is Arch's
+    partial-upgrade trap, and forcing a full `-Syu` during an app install is the
+    operator's call, not ours (see the wiki's rolling-release section)."""
+    steps = []
+    pkgs = [PACMAN_APP_PACKAGES[a] for a in apps if a in PACMAN_APP_PACKAGES]
+    if pkgs:
+        steps.append(("run", ["sudo", "pacman", "-S", "--needed", "--noconfirm"] + pkgs))
+    if "tailscale" in apps:
+        # Parity with the apt path, where tailscale's own install.sh enables the
+        # daemon. The Arch package ships the unit disabled, so without this the
+        # tailnet is down after the next reboot — and the relay's `--bind auto`
+        # would silently fall back to localhost-only.
+        steps.append(("run", ["sudo", "systemctl", "enable", "--now", "tailscaled"]))
+    if "companion" in apps:
+        steps.append(("note", PACMAN_COMPANION_NOTE))
+    return steps
+
+
 def should_enable_companion_control(installed, failed):
     """True iff Companion was just installed on Linux without a failed step, so
     `racecast companion enable-control` should run to wire up the Start/Stop button."""
@@ -501,12 +552,20 @@ def _run_remote_script(url, runner):
 
 
 def _install_linux(missing, assume_yes):
-    if not shutil.which("apt-get"):
-        print("No apt-based distro detected — install manually:")
+    # apt wins when both are present, mirroring install_tools.pick_manager.
+    if shutil.which("apt-get"):
+        manager, steps = "apt", linux_install_steps(missing)
+    elif shutil.which("pacman"):
+        manager, steps = "pacman", pacman_install_steps(missing)
+    else:
+        print("No supported package manager detected — install manually:")
         print(apps_manual_guide(sys.platform))
         return 0
-    steps = linux_install_steps(missing)
-    print("Planned steps (sudo will prompt for your password; the two installer")
+    if not steps:
+        print("Nothing to install here — see the manual guide:")
+        print(apps_manual_guide(sys.platform, manager))
+        return 0
+    print("Planned steps (sudo will prompt for your password; any installer")
     print("scripts are official vendor installers, downloaded over HTTPS):")
     for step in steps:
         if step[0] == "run":
@@ -544,9 +603,12 @@ def _install_linux(missing, assume_yes):
             failed.append(label)
     if "tailscale" in missing:
         print("Tailscale installed? Finish with:  sudo tailscale up")
-    if "companion" in missing:
+    # Companion is only ever installed by the apt plan; on pacman it stayed a note,
+    # so neither the companion-pi line nor enable-control applies (there is no
+    # service to wire up yet).
+    if "companion" in missing and manager == "apt":
         print("Companion: this is the headless/service install (companion-pi).")
-    if should_enable_companion_control(missing, failed):
+    if manager == "apt" and should_enable_companion_control(missing, failed):
         print("Enabling passwordless Companion start/stop (systemd bind helper + sudoers)…")
         try:
             import companion_linux as cl
@@ -576,9 +638,12 @@ def _pipewire_audio_setup(failed):
         import obs_pipewire_linux as opw
         home = os.path.expanduser("~")
         obs_present = app_present("obs", sys.platform)
-        plugin_present = opw.plugin_installed(home)
-        flatpak = opw.is_flatpak_obs(home)
         machine = platform.machine()
+        # ANY location OBS loads from, not just the per-user one — a distro
+        # package (Arch/AUR et al.) already satisfies this, and downloading a
+        # second copy would leave OBS with two builds of the same plugin.
+        plugin_present = opw.plugin_present(home, machine)
+        flatpak = opw.is_flatpak_obs(home)
         if obs_present and not plugin_present and not flatpak and opw.is_prebuilt_arch(machine):
             print(f"Installing OBS PipeWire audio plugin v{opw.PLUGIN_VERSION} "
                   "(Discord audio source) …")
@@ -601,11 +666,13 @@ def _obs_browser_notice():
     import platform
     try:
         import obs_browser_linux as obl
+        arch = obl.normalize_arch(platform.machine()) or "x86_64"
         hint = obl.install_hint(
             platform.machine(),
             obs_present=app_present("obs", sys.platform),
-            browser_present=obl.browser_plugin_installed(
-                obl.obs_plugins_dir(obl.normalize_arch(platform.machine()) or "x86_64")),
+            # Check every plugin dir, not only Debian's multiarch one — Arch keeps
+            # them in a plain /usr/lib/obs-plugins and was reported as "missing".
+            browser_present=obl.browser_plugin_present(obl.obs_plugins_dirs(arch)),
         )
     except Exception:                                  # noqa: BLE001
         hint = None

@@ -436,6 +436,48 @@ def t_should_enable_companion_control_only_on_companion_linux():
     assert m.should_enable_companion_control(["companion"], failed=["companion ..."]) is False
 
 
+# --- Arch / pacman (issue #560) -------------------------------------------
+def t_pacman_plan_installs_the_browser_capable_obs():
+    # The whole point: plain obs-studio has no CEF, so the relay's HUD/timer
+    # Browser Sources stay black. install-apps must not hand an operator that.
+    steps = m.pacman_install_steps(["obs"])
+    assert steps == [("run", ["sudo", "pacman", "-S", "--needed", "--noconfirm",
+                              "obs-studio-browser"])]
+    assert m.PACMAN_APP_PACKAGES["obs"] == "obs-studio-browser"
+
+
+def t_pacman_plan_tailscale_also_enables_the_service():
+    # Parity with the apt path: tailscale's install.sh enables the daemon, the
+    # Arch package does not — without this, `tailscale up` fails after a reboot.
+    steps = m.pacman_install_steps(["tailscale"])
+    assert steps[0] == ("run", ["sudo", "pacman", "-S", "--needed", "--noconfirm",
+                                "tailscale"])
+    assert ("run", ["sudo", "systemctl", "enable", "--now", "tailscaled"]) in steps
+
+
+def t_pacman_plan_batches_repo_packages_into_one_call():
+    steps = m.pacman_install_steps(["obs", "tailscale", "discord"])
+    installs = [s for s in steps if s[0] == "run" and s[1][:2] == ["sudo", "pacman"]]
+    assert len(installs) == 1
+    assert installs[0][1][-3:] == ["obs-studio-browser", "tailscale", "discord"]
+
+
+def t_pacman_plan_companion_is_a_note_not_a_step():
+    # Companion is in no Arch repository and not in the AUR under a usable name.
+    # Say so; never pretend to install it.
+    steps = m.pacman_install_steps(["companion"])
+    assert [s[0] for s in steps] == ["note"]
+    assert "companion" not in m.PACMAN_APP_PACKAGES
+    assert "Companion" in steps[0][1]
+
+
+def t_pacman_plan_never_refreshes_without_upgrading():
+    # `-Sy` without `-u` is Arch's partial-upgrade trap.
+    for step in m.pacman_install_steps(list(m.APPS)):
+        if step[0] == "run":
+            assert not any(a.startswith("-Sy") for a in step[1])
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
