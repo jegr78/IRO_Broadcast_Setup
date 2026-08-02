@@ -173,6 +173,11 @@ def derive(with_tyres=False):
     # The existing "Discord" nested-scene reference is the template for wiring in
     # the new "Commentary Mic" nested-scene reference (same bounds_type-0 shape).
     discord_ref_item = next(it for it in items if it.get("name") == "Discord")
+    # The endurance Stint scene hides Discord (it is only needed in Interview there, and
+    # a third layer tips a weak iGPU into a one-frame render stall). Solo has no such
+    # scene split — the commentator's Discord audio belongs on air in Program — so
+    # re-assert the visibility here instead of inheriting the endurance decision.
+    discord_ref_item["visible"] = True
 
     # Every new Program item takes a genuinely-unused scene-item id, allocated
     # just ABOVE the highest inherited id so later growth in the base Stint scene
