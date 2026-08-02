@@ -1328,7 +1328,7 @@
                     {
                         "name": "Discord",
                         "source_uuid": "9c7de73b-adec-41aa-9394-af084853dff2",
-                        "visible": true,
+                        "visible": false,
                         "locked": true,
                         "rot": 0.0,
                         "align": 5,
@@ -2186,7 +2186,7 @@
                     {
                         "name": "Discord",
                         "source_uuid": "9c7de73b-adec-41aa-9394-af084853dff2",
-                        "visible": true,
+                        "visible": false,
                         "locked": true,
                         "rot": 0.0,
                         "align": 5,
