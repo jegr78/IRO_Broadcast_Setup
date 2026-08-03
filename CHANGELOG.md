@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.9.0](https://github.com/jegr78/gt-racing-broadcast/compare/v1.8.0...v1.9.0) (2026-08-03)
+
+
+### Features
+
+* Arch Linux (pacman) support for install-tools and install-apps ([5080d2a](https://github.com/jegr78/gt-racing-broadcast/commit/5080d2aa6c46ecf9e17ac9d7c13ef208451ac802))
+* **hud:** brand tile colours, qualifying best lap, relay mode ([#555](https://github.com/jegr78/gt-racing-broadcast/issues/555)) ([#557](https://github.com/jegr78/gt-racing-broadcast/issues/557)) ([c6c9446](https://github.com/jegr78/gt-racing-broadcast/commit/c6c9446bdaed6570afbbbc927917106070f35d2b))
+* **install-apps:** install the apps with pacman, and stop re-installing plugins ([f0a5399](https://github.com/jegr78/gt-racing-broadcast/commit/f0a53993a5da1e622ff279565b5d303d6839c980))
+* **install-tools:** install the tool chain with pacman on Arch ([2cca61d](https://github.com/jegr78/gt-racing-broadcast/commit/2cca61d75f6055e86d6c209cf74f7c944b9b6df8))
+* solo mode, GT7 telemetry + GT Racing rebrand (merge epic [#300](https://github.com/jegr78/gt-racing-broadcast/issues/300)) ([d0c8713](https://github.com/jegr78/gt-racing-broadcast/commit/d0c8713f28ea45512102d1621e6334d5e305cff5))
+
+
+### Bug Fixes
+
+* **codeql:** close probe socket + drop redundant test import ([#552](https://github.com/jegr78/gt-racing-broadcast/issues/552)) ([e098b52](https://github.com/jegr78/gt-racing-broadcast/commit/e098b5203324e9ce464ae9d76a7b85910c4a993f))
+* **event:** hand the login session's runtime dir to GUI apps started over SSH ([#560](https://github.com/jegr78/gt-racing-broadcast/issues/560)) ([9809312](https://github.com/jegr78/gt-racing-broadcast/commit/9809312743d034fe004165f7c22392b1cfda1b91))
+* **media:** force-overwrite clip downloads so a stale/placeholder file refreshes ([#553](https://github.com/jegr78/gt-racing-broadcast/issues/553)) ([ad243df](https://github.com/jegr78/gt-racing-broadcast/commit/ad243df4f0a0306a7ea53fb04e23d7ed67495e72))
+* **obs-browser:** send Arch hosts to the package, not a CEF source build ([c402e89](https://github.com/jegr78/gt-racing-broadcast/commit/c402e89cd20cc6de1aaf80546b8fdee8be169f3d))
+* **obs:** hide Discord outside the Interview scene in the endurance collection ([#559](https://github.com/jegr78/gt-racing-broadcast/issues/559)) ([588550d](https://github.com/jegr78/gt-racing-broadcast/commit/588550d8881903368818ddf8430eb2179661dc2f))
+
 ## [1.8.0](https://github.com/jegr78/gt-endurance-racing-broadcast/compare/v1.7.1...v1.8.0) (2026-07-19)
 
 
