@@ -12,13 +12,13 @@ no terminal needed. The `racecast …` commands below are the CLI alternative.
 first-time producers:
 
 - **The Control Center:**
-  <https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Control-Center>
+  <https://github.com/jegr78/gt-racing-broadcast/wiki/Control-Center>
 - **First-time setup** (one time, ~30 min):
-  <https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Set-up-the-broadcast-PC>
+  <https://github.com/jegr78/gt-racing-broadcast/wiki/Set-up-the-broadcast-PC>
 - **Event day:**
-  <https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Run-an-event>
+  <https://github.com/jegr78/gt-racing-broadcast/wiki/Run-an-event>
 - **Start page** (all roles):
-  <https://github.com/jegr78/gt-endurance-racing-broadcast/wiki>
+  <https://github.com/jegr78/gt-racing-broadcast/wiki>
 
 ## Quickstart
 
@@ -44,6 +44,6 @@ anything missing.
 
 The visual **onboarding decks** (one short walkthrough per role) and the printable
 **role cheat sheet** are the central reference — one place for every role:
-<https://jegr78.github.io/gt-endurance-racing-broadcast/>. A local copy of the cheat
+<https://jegr78.github.io/gt-racing-broadcast/>. A local copy of the cheat
 sheet also ships at `docs/slides/cheat_sheets.html` (open it in a browser and print).
 In the Control Center, **Help & Docs → Onboarding decks** opens the same hub.

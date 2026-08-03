@@ -242,7 +242,7 @@ it as a downloadable attachment that recipients open in a browser.
 
 ![Control Center — Help & Docs](images/cc-help.png)
 
-**Start here** opens the visual [onboarding decks](https://jegr78.github.io/gt-endurance-racing-broadcast/)
+**Start here** opens the visual [onboarding decks](https://jegr78.github.io/gt-racing-broadcast/)
 — one short walkthrough per role plus the printable cheat sheet, all in one central place.
 **On this machine** lists the bundled setup guides (rendered offline, no internet needed),
 and the guide links open the always-current pages on this wiki.
@@ -257,5 +257,5 @@ and the guide links open the always-current pages on this wiki.
 ---
 
 > This page is generated from `src/docs/wiki/` in the
-> [main repository](https://github.com/jegr78/gt-endurance-racing-broadcast) — don't edit it
+> [main repository](https://github.com/jegr78/gt-racing-broadcast) — don't edit it
 > here by hand. See [Build & maintenance](Build-and-maintenance).

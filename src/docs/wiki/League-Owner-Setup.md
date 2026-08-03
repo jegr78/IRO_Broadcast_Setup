@@ -1,6 +1,6 @@
 # League-Owner Setup — Discord OAuth
 
-> New here? Start with the visual [League Admin setup deck ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/league-admin-setup.html), then come back for the detail below.
+> New here? Start with the visual [League Admin setup deck ↗](https://jegr78.github.io/gt-racing-broadcast/league-admin-setup.html), then come back for the detail below.
 
 This page covers what the **league owner** (the person who owns the Discord server and
 maintains the league's crew list) needs to do once to enable Discord OAuth login for
@@ -169,5 +169,5 @@ A league can supply its own manufacturer logos for the HUD by adding a **Brands*
 ---
 
 > This page is generated from `src/docs/wiki/` in the
-> [main repository](https://github.com/jegr78/gt-endurance-racing-broadcast) — don't edit it
+> [main repository](https://github.com/jegr78/gt-racing-broadcast) — don't edit it
 > here by hand. See [Build & maintenance](Build-and-maintenance).

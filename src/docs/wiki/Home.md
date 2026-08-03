@@ -21,7 +21,7 @@ flowchart LR
 ```
 
 - **Get the tool:** download the release for your OS from the
-  [latest release](https://github.com/jegr78/gt-endurance-racing-broadcast/releases/latest),
+  [latest release](https://github.com/jegr78/gt-racing-broadcast/releases/latest),
   extract it, and double-click **`racecast-ui`** to open the
   [Control Center](Control-Center) — the web app that runs the whole station from
   your browser. Then follow [Set up the broadcast PC](Set-up-the-broadcast-PC).
@@ -40,7 +40,7 @@ flowchart LR
 - **Watching read-only as Race Control?** → [Console → Race Control desk](Console#race-control-read-only-monitoring-desk)
 - **Helping over the internet without a Tailscale account?** → [Remote access & the Funnel](Remote-access)
 - **Not sure who does what?** → [Who does what](Who-does-what)
-- **New crew?** The [onboarding decks ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/) are short visual walkthroughs per role.
+- **New crew?** The [onboarding decks ↗](https://jegr78.github.io/gt-racing-broadcast/) are short visual walkthroughs per role.
 - **Something's broken?** → [If something goes wrong](If-something-goes-wrong)
 - **Developer / want the technical detail?** → [Architecture](Architecture) and the
   **Technical reference** section in the sidebar.
@@ -68,5 +68,5 @@ flowchart LR
 ---
 
 > This wiki is generated from `src/docs/wiki/` in the
-> [main repository](https://github.com/jegr78/gt-endurance-racing-broadcast) — don't edit pages
+> [main repository](https://github.com/jegr78/gt-racing-broadcast) — don't edit pages
 > here by hand. See [Build & maintenance](Build-and-maintenance).

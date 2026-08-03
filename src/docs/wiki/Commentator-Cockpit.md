@@ -1,6 +1,6 @@
 # Commentator Cockpit
 
-> New here? Start with the visual [Commentator onboarding deck ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/commentator.html), then come back for the detail below.
+> New here? Start with the visual [Commentator onboarding deck ↗](https://jegr78.github.io/gt-racing-broadcast/commentator.html), then come back for the detail below.
 
 ![Commentator Cockpit — the on-air tally, live program monitor, race timer, stream-link submission, crew chat and the graphics browser](images/console-cockpit.png)
 

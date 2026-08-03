@@ -1,6 +1,6 @@
 # Set up the broadcast PC
 
-> New here? Start with the visual [Producer setup deck ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/producer-setup.html), then come back for the detail below.
+> New here? Start with the visual [Producer setup deck ↗](https://jegr78.github.io/gt-racing-broadcast/producer-setup.html), then come back for the detail below.
 
 Do this **once** per machine — about 30 minutes. When you're done, go to
 [Run an event](Run-an-event).
@@ -122,7 +122,7 @@ Sixty seconds of background, and every command on this page makes sense:
 *Takes ~5 minutes.*
 
 Download the archive for your OS from the
-[latest release](https://github.com/jegr78/gt-endurance-racing-broadcast/releases/latest):
+[latest release](https://github.com/jegr78/gt-racing-broadcast/releases/latest):
 
 | OS | File |
 |---|---|
