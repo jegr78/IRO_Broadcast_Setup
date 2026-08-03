@@ -6105,7 +6105,7 @@ def _wiki_repo():
         import update
         return update.REPO
     except Exception:
-        return "jegr78/gt-endurance-racing-broadcast"
+        return "jegr78/gt-racing-broadcast"
 
 
 def _pages_url():

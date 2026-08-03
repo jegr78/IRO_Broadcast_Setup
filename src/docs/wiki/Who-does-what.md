@@ -1,6 +1,6 @@
 # Who does what
 
-> New crew? The [onboarding decks ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/) are short visual walkthroughs, one per role.
+> New crew? The [onboarding decks ↗](https://jegr78.github.io/gt-racing-broadcast/) are short visual walkthroughs, one per role.
 
 Three groups make the show happen: the **commentators** who stream each stint, the
 **producer** at the PC, and the **director** who chooses what viewers see. An optional
@@ -119,7 +119,7 @@ and Discord; not necessarily an OBS/relay operator.
   Discord) and a **Discord channel webhook** for submission/health pings.
 - Optionally designs the **per-league look** (overlay/HUD).
 - Full walkthrough: **[League owner setup](League-Owner-Setup)** (and the deck:
-  [League Admin onboarding ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/league-admin-setup.html)).
+  [League Admin onboarding ↗](https://jegr78.github.io/gt-racing-broadcast/league-admin-setup.html)).
 
 ## Event sizes
 

@@ -18,7 +18,7 @@
 # Producer (event day)
 You start and stop the show and keep the machine healthy.
 The director runs everything in between.
-[Who does what](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Who-does-what)
+[Who does what](https://github.com/jegr78/gt-racing-broadcast/wiki/Who-does-what)
 
 Note: Welcome to the producer onboarding. As producer, your role is simple but vital. You start and stop the show, and you keep the technical machine healthy throughout. Everything in between — the actual broadcast — is run by the director.
 </script></section>
@@ -46,7 +46,7 @@ Open the **Control Center**, confirm the **active league**, and press **Start ev
 
 ![Control Center Home](assets/img/cc-home.png)
 
-[Run an event](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Run-an-event) · [Control Center](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Control-Center)
+[Run an event](https://github.com/jegr78/gt-racing-broadcast/wiki/Run-an-event) · [Control Center](https://github.com/jegr78/gt-racing-broadcast/wiki/Control-Center)
 
 Note: Bringing everything up is essentially one click. Open the Control Center, confirm the active league is correct, and press Start event. It launches Tailscale, Discord, the relay, OBS and Companion, in the right order, for you.
 </script></section>
@@ -64,7 +64,7 @@ Plan about 30 minutes for these steps (all from the Control Center):
 7. **Home → Start event** — confirm each feed shows up in OBS.
 8. Enter the league's **stream key** in OBS (Settings → Stream).
 
-[Run an event](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Run-an-event)
+[Run an event](https://github.com/jegr78/gt-racing-broadcast/wiki/Run-an-event)
 
 Note: Plan about thirty minutes before you go live, all from the Control Center. Confirm the active league profile. Apply any available tool update, then reboot the PC. Run Tools, Update all — outdated tools are the number one cause of feed failures. Refresh your cookies after logging into YouTube, and refresh media and graphics if they changed. Confirm OBS is on your league's scene collection. Run Preflight, and fix anything it flags. Press Start event and confirm each feed shows up in OBS. Finally, enter the league's stream key in OBS, under Settings, Stream.
 </script></section>
@@ -87,7 +87,7 @@ Note: To go live, switch OBS to the Standby scene, then click Start Streaming. F
 
 The director presses **Feeds Next** at each driver change and dresses the scene.
 The producer just monitors the machine.
-[Who does what](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Who-does-what)
+[Who does what](https://github.com/jegr78/gt-racing-broadcast/wiki/Who-does-what)
 
 Note: Here is who does what during the race. The director presses Feeds Next at each driver change and dresses the scene. You, the producer, simply monitor the machine and step in only if something breaks.
 </script></section>
@@ -105,7 +105,7 @@ On the incoming machine's Control Center **Home**, use **Take over** — point i
 
 Then verify Feed A, start your OBS stream — the redirect carries viewers over.
 
-[Run an event](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Run-an-event) · [Remote access](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Remote-access)
+[Run an event](https://github.com/jegr78/gt-racing-broadcast/wiki/Run-an-event) · [Remote access](https://github.com/jegr78/gt-racing-broadcast/wiki/Remote-access)
 
 Note: On twelve and twenty-four hour events, each part has its own producer and stream key, and viewers follow the channel redirect between them. On the incoming machine's Control Center Home, use Take over and point it at the previous producer. It pulls their on-air stint, chat and revocations, and brings your station up at the same point. The standard route is over the public Funnel, which needs no shared Tailscale account; the alternative is the same tailnet. Then verify Feed A, start your OBS stream, and the redirect carries the viewers over.
 </script></section>
@@ -117,7 +117,7 @@ Note: On twelve and twenty-four hour events, each part has its own producer and 
 - When the director is done, they press **OUTRO** — the outro clip plays.
 - After the on-air wrap-up you can **Stop Streaming** in OBS at any time.
 
-[Run an event](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Run-an-event)
+[Run an event](https://github.com/jegr78/gt-racing-broadcast/wiki/Run-an-event)
 
 Note: For the interviews and outro: only the final-part producer joins the Discord Interviews voice channel personally, before the race ends — OBS captures the audio from your local Discord. Stay muted until the director cuts to the Interview scene; joining early is harmless. When the director is done, they press Outro and the outro clip plays. After the on-air wrap-up, you can Stop Streaming in OBS at any time.
 </script></section>
@@ -131,7 +131,7 @@ Common live fixes:
 - **HUD blank** → check the relay is running (Home dashboard).
 - **Port in use** → run `racecast freeport` (or the free-ports action in the Control Center).
 
-[If something goes wrong](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/If-something-goes-wrong)
+[If something goes wrong](https://github.com/jegr78/gt-racing-broadcast/wiki/If-something-goes-wrong)
 
 Note: When things go wrong, run racecast preflight first — it names the exact fix command for anything missing. The common live fixes are these. If a feed won't start, refresh your cookies and confirm deno is installed. If the HUD is blank, check that the relay is running from the Home dashboard. And if a port is in use, run racecast freeport, or use the free-ports action in the Control Center.
 </script></section>
@@ -146,9 +146,9 @@ Three producer beats:
 3. **After** — Stop Streaming in OBS, then Stop event.
 
 Go deeper:
-[Run an event](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Run-an-event) ·
-[Control Center](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Control-Center) ·
-[Who does what](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Who-does-what)
+[Run an event](https://github.com/jegr78/gt-racing-broadcast/wiki/Run-an-event) ·
+[Control Center](https://github.com/jegr78/gt-racing-broadcast/wiki/Control-Center) ·
+[Who does what](https://github.com/jegr78/gt-racing-broadcast/wiki/Who-does-what)
 
 Note: To finish, press Stop event — it stops the relay and Companion, while OBS, Discord and Tailscale keep running. Remember the three producer beats. Before: update, reboot, cookies, graphics, preflight, start. During: watch the machine, and run preflight at the first sign of trouble. After: Stop Streaming in OBS, then Stop event. That is the whole job.
 </script></section>

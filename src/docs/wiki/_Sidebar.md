@@ -17,7 +17,7 @@
 - [Health Monitor](Health-Monitor)
 - [League owner setup](League-Owner-Setup)
 - [Who does what](Who-does-what)
-- [Onboarding decks ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/)
+- [Onboarding decks ↗](https://jegr78.github.io/gt-racing-broadcast/)
 - [If something goes wrong](If-something-goes-wrong)
 
 **Technical reference**

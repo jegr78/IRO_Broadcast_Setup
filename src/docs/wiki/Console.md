@@ -1,6 +1,6 @@
 # The Console launcher
 
-> Run the read-only desk? See the visual [Race Control onboarding deck ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/race-control.html). All crew decks: the [onboarding decks ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/).
+> Run the read-only desk? See the visual [Race Control onboarding deck ↗](https://jegr78.github.io/gt-racing-broadcast/race-control.html). All crew decks: the [onboarding decks ↗](https://jegr78.github.io/gt-racing-broadcast/).
 
 `/console` is the **single page** every crew member opens. There are no separate URLs per
 surface: one page adapts to the signed-in person's role and shows only the cards they are
@@ -98,5 +98,5 @@ re-issuing the link.
 ---
 
 > This page is generated from `src/docs/wiki/` in the
-> [main repository](https://github.com/jegr78/gt-endurance-racing-broadcast) — don't edit it
+> [main repository](https://github.com/jegr78/gt-racing-broadcast) — don't edit it
 > here by hand. See [Build & maintenance](Build-and-maintenance).

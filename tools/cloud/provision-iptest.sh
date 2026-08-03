@@ -30,7 +30,7 @@
 #                        (default: feat/505-multifeed-429-probe).
 set -euo pipefail
 
-RACECAST_REPO="jegr78/gt-endurance-racing-broadcast"
+RACECAST_REPO="jegr78/gt-racing-broadcast"
 RACECAST_USER="${RACECAST_USER:-racecast}"
 COOKIES_SRC="${IPTEST_COOKIES:-/tmp/yt-cookies.txt}"
 URLS="${IPTEST_URLS:-https://www.youtube.com/@SkyNews/live}"

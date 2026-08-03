@@ -3,9 +3,9 @@
 Single-source repo for the GT Racing broadcast producer station.
 **Edit only under `src/`.** `dist/` and `runtime/` are generated and gitignored.
 
-📖 **Operator docs & onboarding:** see the [project wiki](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki)
+📖 **Operator docs & onboarding:** see the [project wiki](https://github.com/jegr78/gt-racing-broadcast/wiki)
 (architecture diagrams, setup, runbook, troubleshooting) and the visual
-[onboarding decks](https://jegr78.github.io/gt-endurance-racing-broadcast/) — one short
+[onboarding decks](https://jegr78.github.io/gt-racing-broadcast/) — one short
 walkthrough per role.
 
 🛠️ **Building from source or contributing?** See [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -42,7 +42,7 @@ Two layers, kept deliberately separate so one machine can run several leagues:
   demo Sheet — `racecast profile use demo` then `racecast graphics && racecast
   relay start` runs out of the box (Sheet layout: [Sheet template wiki page][sheet-tpl]).
 
-[sheet-tpl]: https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Sheet-Template
+[sheet-tpl]: https://github.com/jegr78/gt-racing-broadcast/wiki/Sheet-Template
 
 ## Profiles (leagues)
 
@@ -69,12 +69,12 @@ race timer — and the splitscreen) via `profiles/<name>/overlay/hud.css` (plus 
 and are editable in the Control Center's visual overlay builder.
 The first override on a profile whose `overlay/` did not exist when the relay
 started needs one `racecast relay restart`; later edits apply live (Apply in OBS).
-See the [HUD overlays](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/HUD-Overlays) wiki page.
+See the [HUD overlays](https://github.com/jegr78/gt-racing-broadcast/wiki/HUD-Overlays) wiki page.
 
 ## Get started — the Control Center
 
 Download the latest release for your platform from
-[**GitHub Releases**](https://github.com/jegr78/gt-endurance-racing-broadcast/releases/latest)
+[**GitHub Releases**](https://github.com/jegr78/gt-racing-broadcast/releases/latest)
 (`racecast-windows.zip` / `racecast-macos.tar.gz` / `racecast-linux.tar.gz`, plus
 `racecast-linux-arm64.tar.gz` for ARM64 Linux) and
 extract it into **its own folder**. The archive holds two binaries side by side:
@@ -85,8 +85,8 @@ extract it into **its own folder**. The archive holds two binaries side by side:
 local web dashboard that runs the whole station (setup wizard, service control,
 logs, the Profile view, and General Settings) from your browser. The first launch
 creates a `.env` next to the binaries for your machine config. Full step-by-step:
-[Set up the broadcast PC (wiki)](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Set-up-the-broadcast-PC)
-· [The Control Center (wiki)](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki/Control-Center).
+[Set up the broadcast PC (wiki)](https://github.com/jegr78/gt-racing-broadcast/wiki/Set-up-the-broadcast-PC)
+· [The Control Center (wiki)](https://github.com/jegr78/gt-racing-broadcast/wiki/Control-Center).
 
 The **Profile view** switches leagues, copies a profile to create a new one,
 edits `profile.env` (incl. `OBS_COLLECTION`), edits the overlay CSS, manages

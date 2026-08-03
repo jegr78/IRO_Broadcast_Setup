@@ -32,7 +32,7 @@
 set -euo pipefail
 
 RUSTDESK_VERSION="${RUSTDESK_VERSION:-1.3.8}"
-RACECAST_REPO="jegr78/gt-endurance-racing-broadcast"
+RACECAST_REPO="jegr78/gt-racing-broadcast"
 
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '  \033[1;32mOK\033[0m  %s\n' "$*"; }

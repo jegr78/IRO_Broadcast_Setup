@@ -98,6 +98,15 @@ never goes through yt-dlp).
 |---------|-----|
 | General lag / stutter | Memory is the usual limit (16 GB) — **reboot before the event**, close other apps, run preflight. Make sure OBS uses your GPU to encode. |
 
+## The "?" help button in the panel/cockpit opens a 404
+
+An older build. The repo rename moved the onboarding decks to
+<https://jegr78.github.io/gt-racing-broadcast/>; GitHub redirects repository URLs
+permanently but **not** Pages sites, so the link baked into older binaries is dead.
+`racecast update` fixes it — self-update itself still works, it goes through the
+redirected API. Until then open the decks directly, or use the Control Center, whose
+links follow the new name.
+
 ---
 
 Deeper diagnostics for developers: [Architecture](Architecture),

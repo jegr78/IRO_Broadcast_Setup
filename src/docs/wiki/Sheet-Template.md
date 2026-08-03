@@ -13,7 +13,7 @@ separate [Sheet-Webhook](Sheet-Webhook) page.
 > tabs below, then put your copy's ID in `profile.env`.
 
 CSV stubs for every tab live next to this page under
-[`src/docs/sheet-template/`](https://github.com/jegr78/gt-endurance-racing-broadcast/tree/main/src/docs/sheet-template)
+[`src/docs/sheet-template/`](https://github.com/jegr78/gt-racing-broadcast/tree/main/src/docs/sheet-template)
 — import them as a starting point.
 
 ## How the relay reads it

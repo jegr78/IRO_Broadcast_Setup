@@ -7,9 +7,9 @@ renamed but not overwritten). Frozen-only: a repo checkout updates with
 import argparse, hashlib, json, os, platform as _platform, shutil, sys, tarfile, tempfile
 import urllib.error, urllib.parse, urllib.request, zipfile
 
-# Already-released binaries embed the old slug and rely on GitHub's rename
-# redirect; this constant governs future releases.
-REPO = "jegr78/gt-endurance-racing-broadcast"
+# Renamed from gt-endurance-racing-broadcast; GitHub redirects the old slug (web,
+# git, API), so older binaries keep updating. Never re-create a repo under it.
+REPO = "jegr78/gt-racing-broadcast"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 
 

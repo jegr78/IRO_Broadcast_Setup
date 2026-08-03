@@ -1,8 +1,8 @@
 # Contributing / building from source
 
 This is the developer/maintainer guide. End-user setup and event-day docs live in the
-[project wiki](https://github.com/jegr78/gt-endurance-racing-broadcast/wiki) and the
-[onboarding decks](https://jegr78.github.io/gt-endurance-racing-broadcast/); `CLAUDE.md`
+[project wiki](https://github.com/jegr78/gt-racing-broadcast/wiki) and the
+[onboarding decks](https://jegr78.github.io/gt-racing-broadcast/); `CLAUDE.md`
 holds the deep architecture reference.
 
 ## Ground rules

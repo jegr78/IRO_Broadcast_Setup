@@ -230,5 +230,5 @@ relay's live `/health-monitor/data` endpoint. The charting library
 ---
 
 > This page is generated from `src/docs/wiki/` in the
-> [main repository](https://github.com/jegr78/gt-endurance-racing-broadcast) — don't edit it
+> [main repository](https://github.com/jegr78/gt-racing-broadcast) — don't edit it
 > here by hand. See [Build & maintenance](Build-and-maintenance).

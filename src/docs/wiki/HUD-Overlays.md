@@ -1,6 +1,6 @@
 # HUD overlays
 
-> New here? The visual [Overlay Package Designer deck ↗](https://jegr78.github.io/gt-endurance-racing-broadcast/overlay-designer.html) walks the builder + live preview; this page is the operator reference.
+> New here? The visual [Overlay Package Designer deck ↗](https://jegr78.github.io/gt-racing-broadcast/overlay-designer.html) walks the builder + live preview; this page is the operator reference.
 
 > Operator reference for restyling the on-screen HUD (including the race timer) per league.
 > Profiles in general are covered in [League profiles](Profiles).
@@ -162,5 +162,5 @@ naming convention is **`GT Racing Endurance — <league>`** (set via the profile
 ---
 
 > This page is generated from `src/docs/wiki/` in the
-> [main repository](https://github.com/jegr78/gt-endurance-racing-broadcast) — don't edit it
+> [main repository](https://github.com/jegr78/gt-racing-broadcast) — don't edit it
 > here by hand. See [Build & maintenance](Build-and-maintenance).
