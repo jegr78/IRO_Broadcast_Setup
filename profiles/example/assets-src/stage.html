@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Example league — asset stage</title>
+<!--
+  One element per still, each carrying id=<screen id> from kit.json and sized
+  exactly 1920x1080. The renderer screenshots the ELEMENT, not the viewport, so
+  the captions between them never end up in the output.
+
+  window.applyText(cfg) receives the merged texts (kit defaults < event.json <
+  --set) and must write them into the page. Keep it defensive: a key that is
+  missing simply leaves the markup untouched.
+-->
+<style>
+  :root { --accent: #C8A44A; --ink: #12131A; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; font-family: system-ui, sans-serif; }
+  .screen { position: relative; width: 1920px; height: 1080px; overflow: hidden;
+            margin: 0 0 24px; background: var(--ink); color: #fff; }
+  .label { color: #888; font: 600 20px/1.6 system-ui, sans-serif; padding: 6px 2px; }
+  .centre { position: absolute; left: 0; right: 0; text-align: center; }
+  .rule { margin: 32px auto 0; width: 420px; height: 4px; background: var(--accent); }
+</style>
+
+<div class="label">1 &middot; Standby.png</div>
+<div class="screen" id="standby">
+  <div class="centre" style="top: 400px">
+    <div id="title" style="font-size: 128px; font-weight: 800; letter-spacing: -.02em">ROUND 1</div>
+    <div class="rule"></div>
+    <div id="subtitle" style="margin-top: 34px; font-size: 34px; letter-spacing: .3em;
+         color: var(--accent)">EXAMPLE LEAGUE</div>
+  </div>
+  <div class="centre" style="bottom: 90px; font-size: 40px; letter-spacing: .12em">
+    BROADCAST STARTS SHORTLY
+  </div>
+</div>
+
+<div class="label">2 &middot; Intermission.png</div>
+<div class="screen" id="intermission">
+  <div class="centre" style="top: 470px; font-size: 72px; letter-spacing: .04em">
+    BROADCAST WILL RESUME SHORTLY
+  </div>
+  <div class="rule"></div>
+</div>
+
+<script>
+  // Contract: the renderer calls this once, before any screenshot.
+  window.applyText = cfg => {
+    const set = (id, value) => {
+      const el = document.getElementById(id);
+      if (el && value != null) el.textContent = value;
+    };
+    set("title", cfg.title);
+    set("subtitle", cfg.subtitle);
+  };
+</script>

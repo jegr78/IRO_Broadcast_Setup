@@ -78,3 +78,30 @@ profile/runtime/cookies in, enable cockpit on the copy, set up a Playwright venv
 tear down) is captured in the **`racecast-e2e`** skill, which builds on the
 **`racecast-local-uat`** skill's data copy-in. Spec/plan:
 `docs/superpowers/{specs,plans}/2026-06-17-e2e-regression-harness*.md`.
+
+## Broadcast-asset renderer (`tools/render-assets.py` + `tools/assets_kit.py`)
+
+Renders a league's stills (Standby, Intermission, …) and intro/outro clips from
+an **asset kit** in its profile. `--help` documents the invocation and
+`profiles/example/assets-src/README.md` the kit contract; what neither can tell
+you:
+
+- **Frames must depend only on `t`.** The renderer sets time explicitly per
+  frame (`window.renderAt(scene, t)`) instead of letting CSS animate. A kit that
+  reaches for a CSS animation, `requestAnimationFrame` or `Date.now()` renders
+  differently on every run and breaks `--probe`, which jumps straight to second
+  24 without rendering the 23 before it.
+- **A music cut is coupled to the animation.** `audio.start` in `kit.json` and
+  the beat the scene is built around are one decision: if the track's first beat
+  is at 0:24 and the logo reveal sits at 23.5 s, `start` must be 0.5. Change one
+  and the other has to move, or picture and sound drift apart — this was live
+  once (the cut started at 4 s and the hit landed 3.5 s early).
+- **League kits never enter the repo.** `profiles/*` is gitignored bar the
+  example/demo profiles, so a real kit (with its poster crops and league logos)
+  stays machine-local and travels via `racecast profile export`. Licensed music
+  is additionally gitignored; a missing track renders the scene silent instead
+  of failing, so a kit still works for someone without the audio.
+- Pure logic (manifest validation, filename guarding, ffmpeg argv, text merge)
+  lives in `assets_kit.py` and is covered by `tests/test_assets_kit.py`; the
+  browser/process layer stays in the script — the same split as
+  `e2e_checks.py` vs `e2e.py`.

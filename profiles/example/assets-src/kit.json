@@ -1,0 +1,30 @@
+{
+  "_comment": "Minimal working asset kit — copy this folder into your own profile and restyle it. Screen ids match element ids in stage.html; scene names match window.SCENES in motion.html. Render with: python3 tools/render-assets.py --profile <name>",
+
+  "stills": {
+    "standby":      "Standby.png",
+    "intermission": "Intermission.png"
+  },
+
+  "scenes": {
+    "intro": {
+      "duration": 6,
+      "fps": 30,
+      "output": "Intro.mp4",
+      "_audio_comment": "Optional. 'path' is relative to this kit; licensed music is normally kept OUTSIDE the repo, so a missing file renders the scene silent. Override per run with --audio PATH.",
+      "audio": {
+        "path": "music/theme.mp3",
+        "start": 0,
+        "duration": 6,
+        "fadeIn": 0.5,
+        "fadeOut": {"start": 4.5, "duration": 1.5}
+      }
+    }
+  },
+
+  "text": {
+    "_comment": "Defaults for every round; event.json overrides them, --set overrides both.",
+    "title": "ROUND 1",
+    "subtitle": "EXAMPLE LEAGUE"
+  }
+}
