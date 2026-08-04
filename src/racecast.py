@@ -2296,12 +2296,23 @@ def _frozen_child_env():
     that shares the parent's _MEIPASS extraction dir — which the parent deletes
     on exit, killing the daemon ('Failed to import encodings module'). Setting
     PYINSTALLER_RESET_ENVIRONMENT=1 is the documented way to spawn an
-    independent instance: the child extracts its own bundle and outlives us."""
+    independent instance: the child extracts its own bundle and outlives us.
+
+    The child also gets its extraction dir moved OUT of the OS temp dir into
+    runtime/bundle. A daemon runs for days, and every OS reaps its temp dir on a
+    schedule without asking whether anything is still using it — a relay that
+    stays up between two events otherwise loses its HUD pages mid-life while
+    looking healthy (see services.daemon_bundle_env)."""
     if not IS_FROZEN:
         return None
     env = os.environ.copy()
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    return env
+    bundle_dir = os.path.join(_runtime_base_dir(), "bundle")
+    try:
+        os.makedirs(bundle_dir, exist_ok=True)
+    except OSError:
+        return env  # unwritable install dir — keep the OS default, don't fail
+    return sv.daemon_bundle_env(env, bundle_dir)
 
 
 def relay_start_plan(*, port_pids, feed_pids, pidfile_pid, pidfile_alive,

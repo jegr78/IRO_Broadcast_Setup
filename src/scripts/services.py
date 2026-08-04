@@ -95,6 +95,31 @@ def external_tool_env(frozen=None, environ=None):
     return env
 
 
+def daemon_bundle_env(env, bundle_dir, os_name=None):
+    """Copy of *env* with the temp dir pointed at *bundle_dir*.
+
+    A frozen onefile daemon unpacks src/ into the OS temp dir and reads from it
+    for its whole life, but every OS reaps that dir on a schedule without
+    checking whether anything is still using it (macOS after 3 days, Linux
+    after 10). A relay left running between two events therefore loses its HUD
+    pages while looking perfectly healthy.
+
+    The bootloader honours TMPDIR/TMP/TEMP (measured, not assumed), and it reads
+    them BEFORE Python starts — which is why this can only be done for a child
+    we spawn, never for ourselves after the fact. It is free here: the child is
+    starting anyway and unpacks exactly once either way.
+
+    An empty bundle_dir returns the environment unchanged, so a source run keeps
+    the OS default.
+    """
+    if not bundle_dir:
+        return env
+    out = dict(env)
+    for var in (("TMP", "TEMP") if (os_name or os.name) == "nt" else ("TMPDIR",)):
+        out[var] = bundle_dir
+    return out
+
+
 def stop_commands(os_name, pid, force):
     """argv to stop a PID on Windows (taskkill), or None where POSIX signals apply.
     /T kills the child tree — the relay's streamlink/yt-dlp children must not be

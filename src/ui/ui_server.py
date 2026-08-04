@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import logsetup   # re-open-per-poll log tailing (scripts/ on sys.path via racecast)
 import http_util
+import bundle_cache
 
 APP_ID = "racecast-control-center"
 DEFAULT_PORT = 8089
@@ -122,6 +123,12 @@ def make_handler(ctx):
     jobs (ui_jobs.JobManager), log_sources {name: {files, dir, archives, read}},
     favicon_path (the brand SVG served at /favicon.svg),
     shutdown() (installed by serve())."""
+
+    # Read the bundled page ONCE, now, while the extraction dir is certain to
+    # exist. Lazy caching would not save a page that nobody opens before the
+    # OS temp-dir cleaner runs — and this server is meant to be left running.
+    _pages = bundle_cache.BundleCache()
+    _pages.prewarm([ctx["page_path"]])
 
     class Handler(BaseHTTPRequestHandler):
         _CTYPES = {".png": "image/png", ".jpg": "image/jpeg",
@@ -954,11 +961,15 @@ def make_handler(ctx):
             return self._not_found()
 
         def _page(self):
+            # Served from memory after the first read: a frozen build unpacks
+            # this page into the OS temp dir, which the OS reaps on a schedule
+            # while we keep running (macOS after 3 days). Reading per request
+            # made a Control Center that had been up for two weeks answer every
+            # request with an error although nothing had crashed.
             try:
-                with open(ctx["page_path"], "rb") as fh:
-                    body = fh.read()
+                body = _pages.read(ctx["page_path"])
             except OSError:
-                return self._not_found("page not bundled")
+                return self._not_found(bundle_cache.eviction_hint(ctx["page_path"]))
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")

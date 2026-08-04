@@ -15,6 +15,30 @@ _ORIG_ANNOUNCE_TAKEOVER = m._announce_takeover
 m._announce_takeover = lambda *a, **k: None
 
 
+def t_frozen_child_env_moves_the_extraction_dir_out_of_os_temp():
+    # A frozen daemon lives for days; the OS reaps its temp dir underneath it.
+    # The child must unpack into runtime/bundle instead — the parent is the only
+    # one who can decide this, because the bootloader reads TMPDIR before Python.
+    with tempfile.TemporaryDirectory() as tmp:
+        orig_frozen, orig_base = m.IS_FROZEN, m._runtime_base_dir
+        try:
+            m.IS_FROZEN = True
+            m._runtime_base_dir = lambda: tmp
+            env = m._frozen_child_env()
+            assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+            expected = os.path.join(tmp, "bundle")
+            key = "TEMP" if os.name == "nt" else "TMPDIR"
+            assert env[key] == expected, env[key]
+            assert os.path.isdir(expected)     # created, or the child would fail
+        finally:
+            m.IS_FROZEN, m._runtime_base_dir = orig_frozen, orig_base
+
+
+def t_frozen_child_env_is_none_when_not_frozen():
+    # Source runs must inherit the environment untouched.
+    assert m._frozen_child_env() is None
+
+
 def t_service_start():
     assert m.route(["relay", "start"]) == \
         {"kind": "service", "command": "relay", "verb": "start", "rest": []}
@@ -2905,6 +2929,47 @@ def t_function_local_peer_imports_are_frozen():
     missing = sorted(m for m in local_imports if f'"{m}"' not in build_src)
     assert not missing, ("peer modules imported function-locally in racecast.py but "
                          f"not --hidden-import in tools/build-binary.py: {missing}")
+
+
+def t_path_loaded_module_imports_are_frozen():
+    """src/ui/*.py is loaded by PATH, not imported as a package, so PyInstaller's
+    scan never walks it — a peer module imported there is invisible to the build
+    even at module level. It must be a --hidden-import unless racecast.py already
+    imports it at module level (then the scan picks it up via that route).
+    Adding bundle_cache to ui_server.py broke the frozen binary exactly this way;
+    the older guard only covered function-local imports in racecast.py."""
+    import ast
+    src_dir = os.path.join(ROOT, "src")
+    scripts_dir = os.path.join(src_dir, "scripts")
+
+    def is_peer(name):
+        return os.path.exists(os.path.join(scripts_dir, name + ".py"))
+
+    def imported_names(path, top_level_only=False):
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        nodes = tree.body if top_level_only else ast.walk(tree)
+        found = set()
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                found |= {a.name for a in node.names}
+        return found
+
+    seen_by_scan = imported_names(os.path.join(src_dir, "racecast.py"),
+                                  top_level_only=True)
+    with open(os.path.join(ROOT, "tools", "build-binary.py"), encoding="utf-8") as fh:
+        build_src = fh.read()
+
+    missing = set()
+    ui_dir = os.path.join(src_dir, "ui")
+    for name in sorted(os.listdir(ui_dir)):
+        if not name.endswith(".py"):
+            continue
+        for mod in imported_names(os.path.join(ui_dir, name)):
+            if is_peer(mod) and mod not in seen_by_scan and f'"{mod}"' not in build_src:
+                missing.add(mod)
+    assert not missing, ("peer modules imported by path-loaded src/ui modules but "
+                         f"not --hidden-import in tools/build-binary.py: {sorted(missing)}")
 
 
 # ---- event title providers (Control Center Home; #207 follow-up) ----
