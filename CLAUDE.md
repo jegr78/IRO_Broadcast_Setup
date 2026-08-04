@@ -144,6 +144,15 @@ python3 tools/broadcast-chat-probe.py https://www.twitch.tv/SomeChannel     # or
 # Probe GT7 UDP telemetry (#324) against a LIVE PS4/PS5 — standalone, no relay/Sheet.
 python3 tools/gt7-telemetry-probe.py --ps-ip 192.168.1.42   # heartbeat + decrypt + field dump
 
+# Render a league's broadcast stills + intro/outro videos from its asset kit
+# (profiles/<name>/assets-src/: stage.html + motion.html + kit.json + event.json).
+# A new race weekend is a text edit in event.json, not a design change. Needs the
+# optional Playwright package + ffmpeg; the contract is documented in
+# profiles/example/assets-src/README.md.
+python3 tools/render-assets.py --profile NAME              # stills + scenes
+python3 tools/render-assets.py --profile NAME --stills --out runtime/NAME/graphics
+python3 tools/render-assets.py --profile NAME --probe intro=0,12,24   # key frames
+
 # Publish the GitHub wiki from src/docs/wiki/ (maintainer; --dry-run to preview)
 python3 tools/sync-wiki.py
 ```

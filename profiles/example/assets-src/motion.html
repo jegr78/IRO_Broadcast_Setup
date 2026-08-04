@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Example league — motion stage</title>
+<!--
+  One element per scene, id=<scene name> from kit.json, sized 1920x1080.
+
+  The renderer drives time explicitly: for every frame it calls
+  window.renderAt(scene, t) with t in seconds, then screenshots the element.
+  Do NOT use CSS animations or requestAnimationFrame — a frame must depend only
+  on t, otherwise two runs of the same scene differ.
+
+  Required globals:
+    window.SCENES   { <name>: { dur: <seconds> } }
+    window.setScene(name)      show that scene, hide the others
+    window.renderAt(name, t)   position everything for time t
+    window.applyText(cfg)      same contract as stage.html (optional)
+-->
+<style>
+  :root { --accent: #C8A44A; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #000; }
+  .stage { position: relative; width: 1920px; height: 1080px; overflow: hidden;
+           background: #000; color: #fff; font-family: system-ui, sans-serif; }
+  .hide { display: none; }
+</style>
+
+<div class="stage" id="intro">
+  <div id="i-title" style="position:absolute;left:0;right:0;top:430px;text-align:center;
+       font-size:132px;font-weight:800">ROUND 1</div>
+  <div id="i-rule" style="position:absolute;left:50%;top:610px;height:4px;background:var(--accent)"></div>
+  <div id="i-sub" style="position:absolute;left:0;right:0;top:664px;text-align:center;
+       font-size:34px;letter-spacing:.3em;color:var(--accent)">EXAMPLE LEAGUE</div>
+  <div id="i-fade" style="position:absolute;inset:0;background:#000"></div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  // Eased 0..1 ramp between a and b — the only timing primitive needed.
+  const ramp = (t, a, b) => {
+    const x = Math.max(0, Math.min(1, (t - a) / (b - a)));
+    return 1 - Math.pow(1 - x, 3);
+  };
+
+  function intro(t) {
+    const p = ramp(t, 0.3, 2.0);
+    $("i-title").style.opacity = p;
+    $("i-title").style.transform = `translateY(${(1 - p) * 24}px)`;
+    const w = ramp(t, 1.4, 3.0) * 420;
+    $("i-rule").style.width = w + "px";
+    $("i-rule").style.marginLeft = (-w / 2) + "px";
+    $("i-sub").style.opacity = ramp(t, 2.2, 3.6);
+    // Fade in from black at the head, out to black at the tail.
+    $("i-fade").style.opacity = Math.max(1 - ramp(t, 0, 0.8), ramp(t, 5.0, 6.0));
+  }
+
+  window.SCENES = { intro: { fn: intro, dur: 6 } };
+  window.setScene = name => {
+    for (const key of Object.keys(window.SCENES)) {
+      $(key).classList.toggle("hide", key !== name);
+    }
+  };
+  window.renderAt = (name, t) => window.SCENES[name].fn(t);
+  window.applyText = cfg => {
+    const set = (id, value) => {
+      const el = $(id);
+      if (el && value != null) el.textContent = value;
+    };
+    set("i-title", cfg.title);
+    set("i-sub", cfg.subtitle);
+  };
+
+  window.setScene("intro");
+  intro(0);
+</script>
