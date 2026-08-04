@@ -94,7 +94,7 @@ def t_output_name_rejects_path_traversal():
         try:
             k.safe_output_name(bad)
         except k.KitError:
-            pass
+            pass  # rejected, which is what this asserts
         else:
             raise AssertionError(f"{bad!r} must be rejected")
 
