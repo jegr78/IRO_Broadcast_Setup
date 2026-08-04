@@ -87,44 +87,9 @@ no package manager); external runtime deps are `yt-dlp`, `streamlink`, `ffmpeg`,
 ## Commands
 
 ```bash
-# Tests (stdlib only — each file is a runnable script, no pytest)
-python3 tests/test_pov.py            # relay POV/schedule unit checks
-python3 tests/test_bind.py           # relay auto dual-bind (localhost + Tailscale IP)
-python3 tests/test_companion.py      # Companion start/stop bind helpers
-python3 tests/test_preflight.py      # preflight classifier unit checks
-python3 tests/test_services.py       # daemon helper (PID/spawn/stop)
-python3 tests/test_racecast.py            # racecast CLI routing
-python3 tests/test_config.py         # profile/config resolver (machine .env + profile.env, active pointer)
-python3 tests/test_profile.py        # profile admin (list/show/use/new --from)
-python3 tests/test_overlay.py        # per-league overlay overrides (hud/splitscreen CSS + fonts serving)
-python3 tests/test_streams.py       # static-streams helpers (frozen feed spawn)
-python3 tests/test_roles.py          # crew roster (CrewSource) + role resolution (#216)
-python3 tests/test_console.py        # /console authorization policy: capability matrix + decision (#216)
-python3 tests/test_console_gate.py   # /console auth gate: token->roles->decide fall-through (#216)
-python3 tests/test_event.py          # event readiness helpers (probes/launch/assets)
-python3 tests/test_tailscale.py      # Tailscale detection/control helpers
-python3 tests/test_obsws.py          # minimal obs-websocket client (feed release on stop, page refresh on start)
-python3 tests/test_discord_web.py    # Discord-web/browser capture decision (native-vs-web, browser target)
-python3 tests/test_discord_oauth.py  # pure Discord OAuth helpers (state HMAC, handle match, token mint)
-python3 tests/test_http_util.py     # shared outbound-HTTP helper + User-Agent guard
-python3 tests/test_installer_common.py  # shared installer helpers (brew bootstrap)
-python3 tests/test_install_tools.py     # install-tools decision helpers
-python3 tests/test_install_apps.py      # install-apps decision helpers
-python3 tests/test_init.py           # racecast init wizard logic (plan/skip/gates)
-python3 tests/test_timer.py          # relay race-timer unit checks
-python3 tests/test_chat.py           # crew chat (ChatStore + chat_admin + endpoints)
-python3 tests/test_submissions.py    # cockpit stream-link submissions (pending store + own-row resolver + endpoints)
-python3 tests/test_event_title.py    # free-text event title (#207): sanitizer + EventTitleStore + /event/title + /status + /cockpit/data
-python3 tests/test_backup.py         # profile look backups (zip snapshot create/list/restore/delete)
-python3 tests/test_setup.py          # panel sheet-control (webhook payloads, SetupControl, endpoints)
-python3 tests/test_ui_ops.py         # Control Center structured status providers + op registry
-python3 tests/test_ui_jobs.py        # Control Center job manager (child spawn, line buffer)
-python3 tests/test_ui_server.py      # Control Center HTTP server (routes, SSE, quit)
-python3 tests/test_e2e.py            # e2e-harness pure pieces (free-port, CSV builder, check registry, gates)
-python3 tests/test_logs.py           # rotating logger, prune, subprocess pump, OBS dir, archive resolution
-python3 tests/test_cues.py           # director text-cue channel (cue_admin: sanitize/active-set/prune/apply_pulled)
-# The list above is a representative subset; `tests/` has more (build/binary, splitscreen,
-# standby, funnel-setup, cockpit, console-proxy, fonts, …). run-tests.py runs ALL of them.
+# Tests (stdlib only — each file under tests/ is a runnable script, no pytest).
+# `ls tests/` lists them; each file's name says what it covers.
+python3 tests/test_pov.py            # e.g. one file: relay POV/schedule unit checks
 python3 tools/run-tests.py           # the whole suite (exactly what CI runs)
 python3 tools/lint.py                # ruff lint (= the CI lint job); --fix auto-corrects.
                                      # Rules mirror the CodeQL alert classes — see ruff.toml.
@@ -142,69 +107,30 @@ python3 tools/e2e.py                  # synthetic mode: self-contained, no real 
 python3 tools/e2e.py --real-league NAME   # local-only: drive the copied real-league dev build (refuses under CI)
 python3 tools/e2e.py --playwright [--headed] [--shots DIR]  # optional rendered checks / visible browser / MCP-free screenshot tour
 
-# Unified operator CLI (the producer's main entrypoint)
-python3 src/racecast.py relay start       # start the relay in the background
-python3 src/racecast.py relay stop        # stop it
-python3 src/racecast.py relay logs -f     # tail the relay log (console + feed_A/B/POV, merged)
-python3 src/racecast.py relay logs --list                  # list available archive dates
-python3 src/racecast.py relay logs --archive 2026-06-17   # read a past day's rotated log
-python3 src/racecast.py relay run         # foreground/debug mode
-python3 src/racecast.py companion enable-control  # Linux only: one-time setup (systemd drop-in + root helper + sudoers rule)
-python3 src/racecast.py companion start   # bind Companion to Tailscale IP and start it
-python3 src/racecast.py companion stop
-python3 src/racecast.py streams start     # static/public-stream mode
-python3 src/racecast.py streams stop
-python3 src/racecast.py status            # aggregate health of all services
-python3 src/racecast.py ui                # local Control Center web app (dashboard, service control, logs, profiles, settings); port 8089 / RACECAST_UI_PORT
-python3 src/racecast.py profile list      # list league profiles (profiles/<name>/profile.env)
-python3 src/racecast.py profile show      # show the active profile's resolved league config (add <name> for another)
-python3 src/racecast.py profile use NAME  # switch the active profile (writes runtime/active-profile)
-python3 src/racecast.py profile new NAME  # scaffold a new league profile (--from SRC copies an existing one)
-python3 src/racecast.py profile export NAME      # export a league profile to a portable zip (--no-assets, --out PATH)
-python3 src/racecast.py profile import FILE       # import a profile bundle (--force to replace an existing one)
-python3 src/racecast.py --profile NAME <command>  # run ONE command against a non-active profile
-python3 src/racecast.py event status      # event-day readiness report (apps + services + assets)
-python3 src/racecast.py event start       # bring everything up (Tailscale, Discord, relay, OBS, Companion); --stint N = mid-event takeover (stint N is on air; /set/stint/<n> corrects later); --qualifying = qualifying mode (Feed A serves the Qualifying tab; switch live via /mode/race|/mode/qualifying or the panel); --title "…" = free-text event title shown in Panel/Cockpit/Discord (#207; also editable live in the panel, persisted to runtime/<profile>/event.json, pulled from producer A at takeover)
-python3 src/racecast.py event takeover <A-ip> [--stint N]  # take over from A over the tailnet: read on-air stint+league from /status, pull chat+cockpit-versions, bring up at that stint
-python3 src/racecast.py event takeover <A-magicdns-host> --funnel [--stint N]  # same but over the public Funnel — no Tailscale account needed on B; authenticated with the shared league CONSOLE_SECRET (step-up via X-Console-Secret header); calls /console/takeover/{status,chat,versions}; status is redacted (live/league/event_title/timer/mode only — feed stream URLs never leave the tailnet)
-python3 src/racecast.py event stop        # generate+send the post-event report to Discord (default-on, --no-report skips), leave the auto-joined Discord voice channel (default-on, RACECAST_DISCORD_AUTOLEAVE=0 opts out), then stop racecast services; GUI apps keep running
-python3 src/racecast.py tailscale up|down|status  # connect/disconnect/inspect Tailscale (event start connects automatically)
-python3 src/racecast.py obs refresh       # force-reload the relay-served OBS browser sources (HUD/timer)
-python3 src/racecast.py obs collection    # check the active OBS scene collection (add `set` to switch to the active profile's collection)
-python3 src/racecast.py obs logs          # tail the newest OBS Studio log (read-only, not rotated by racecast)
-python3 src/racecast.py tailscale logs    # tail the tailscale.snapshot.log (timestamped `tailscale status` blocks, appended on start + racecast tailscale status)
-python3 src/racecast.py sheet open        # open the active league's Google Sheet in the browser (built from its SHEET_ID); `sheet url` prints the link. Also an "Open Sheet ↗" button in the Control Center Profile view.
-python3 src/racecast.py init              # guided first-time setup: .env gate, profile select, install-tools/-apps, cookies, graphics, media, setup, export companion, preflight — with skip-detection (--browser NAME, --skip-installs, --force)
-python3 src/racecast.py update            # self-update the binary from GitHub Releases (--tag TAG installs an exact release; UI previews use this)
-python3 src/racecast.py freeport          # free a stuck feed port (default 53001-53003); kills an orphaned holder so a feed can bind. Refuses a running relay/streams (would cut a live feed) unless --force. Cross-platform port→PID (lsof/ss/fuser/netstat) in src/scripts/ports.py; per-process kill (not the session-group kill of #133's stop path). Also a Control Center action (free-ports op) + a `relay start` warning when a feed port is already bound.
-python3 src/racecast.py preflight         # hardware/tool check
-python3 src/racecast.py speedtest          # opt-in Ookla bandwidth test; logs locally, preflight warns vs 25/10 Mbps
-python3 src/racecast.py gt7-discover      # find the PS4/PS5 running GT7 on the LAN and (with --save / the Control Center's "Discover PlayStation" button) persist its IP to RACECAST_GT7_PS_IP; prefers a running relay's already-latched console (GET /telemetry/data), else a broadcast scan (GT7 must be in an active session)
-python3 src/racecast.py cookies firefox          # refresh YouTube cookies before an event (Firefox recommended; Windows Chrome/Edge exports are blocked by app-bound encryption)
-python3 src/racecast.py cookies twitch firefox   # refresh Twitch cookies (only needed for gated sub/follower-only Twitch feeds)
-python3 src/racecast.py graphics          # download broadcast graphics -> runtime/<profile>/graphics/
-python3 src/racecast.py media             # download Intro/Outro/Trailer clips -> runtime/<profile>/media/
-python3 src/racecast.py brands            # download per-league brand-logo overrides (Sheet "Brands" tab) -> runtime/<profile>/brands/
-python3 src/racecast.py setup --out runtime/<profile>/GT_Racing_Endurance.import.json   # localize OBS collection
-python3 src/racecast.py install-tools     # install yt-dlp/streamlink/ffmpeg/deno (winget/brew/apt — Linux apt runs via sudo; deno has no apt pkg so it's a pinned, SHA-256-verified GitHub-release download into runtime/bin, which racecast adds to PATH; bootstraps brew on macOS); --update also upgrades installed ones (pre-event)
-python3 src/racecast.py install-apps      # install OBS/Companion/Tailscale/Discord (winget/brew/apt+official installers); --update upgrades installed ones (Linux: prints per-app guide)
-python3 src/racecast.py obs-browser       # Linux only: build & install OBS's Browser Source plugin (obs-browser + CEF) from source — the distro/PPA ships none on aarch64, and the relay HUD/timer need a Browser Source. Pins CEF per OBS version (see obs_browser_linux.py); --yes skips the prompt. On no-GPU/VM hosts also disable OBS Browser Source Hardware Acceleration.
-python3 src/racecast.py export companion  # write the Companion button config for import
-python3 src/racecast.py chat clear        # wipe the crew-chat history on the active relay
-python3 src/racecast.py chat pull <ip>    # take over another producer's chat history at handover (relay may be running)
-python3 src/racecast.py chat import <file> # load a previously exported JSON file into the relay
-python3 src/racecast.py chat export       # write the current chat history to chat-export.json (or --out PATH)
-python3 src/racecast.py backup create|list|restore|delete <label>  # named look snapshots (overlay+graphics+media) per profile
-python3 src/racecast.py links              # print per-person /console launcher links (Crew tab ∪ live Schedule); --post drops them into crew chat
-python3 src/racecast.py funnel on|off  # public ingress for ONLY /console (the role-adaptive crew launcher) via Tailscale Funnel (needs MagicDNS+HTTPS+funnel nodeAttr)
-python3 src/racecast.py console setup-funnel    # automate the one-time tailnet prereqs (MagicDNS + funnel nodeAttr) via a Tailscale API access token; --apply to perform (dry-run default)
-python3 src/racecast.py console token revoke <streamer>  # rotate one commentator's link (bumps their version)
-python3 src/racecast.py console pull-versions <ip>  # pull the console-versions revocation map from another producer (takeover helper)
-# Note: the per-league CONSOLE_SECRET is auto-provisioned on first relay start (zero-config); there is no separate enable/disable command
-python3 src/racecast.py health export [--from TS] [--out PATH]   # dump health history to JSON Lines
-python3 src/racecast.py health import <file.jsonl>               # merge a health-history dump (dedup by ts)
-python3 src/racecast.py health pull <ip> [--port N] [--from TS]  # pull another producer's health history (takeover helper)
-python3 src/racecast.py --version
+# Unified operator CLI (the producer's main entrypoint) — the canonical, always-current
+# command list is the CLI's own help; read it instead of duplicating it here:
+python3 src/racecast.py --help
+python3 src/racecast.py <group> --help    # e.g. relay | event | profile | console | obs
+
+# Non-obvious bits that `--help` does NOT tell you:
+# - cookies: Firefox is the recommended browser — Windows Chrome/Edge exports are blocked
+#   by app-bound encryption. `cookies twitch <browser>` is only needed for gated
+#   (sub/follower-only) Twitch feeds.
+# - install-tools: deno has no apt package, so it is a pinned, SHA-256-verified
+#   GitHub-release download into runtime/bin (racecast adds that to PATH); brew is
+#   bootstrapped on macOS; Linux apt runs via sudo.
+# - obs-browser: Linux/aarch64 only — no distro/PPA ships obs-browser there and the relay
+#   HUD/timer need a Browser Source. Pins CEF per OBS version (obs_browser_linux.py).
+#   On no-GPU/VM hosts also disable OBS Browser Source Hardware Acceleration.
+# - freeport: refuses a running relay/streams (it would cut a live feed) unless --force.
+#   Per-process kill (NOT the session-group kill of #133's stop path); port→PID lookup is
+#   cross-platform in src/scripts/ports.py.
+# - console: the per-league CONSOLE_SECRET is auto-provisioned on first relay start
+#   (zero-config) — there is no enable/disable command.
+# - event takeover --funnel: authenticated with the shared league CONSOLE_SECRET (step-up
+#   X-Console-Secret header); /console/takeover/status is REDACTED — feed stream URLs
+#   never leave the tailnet.
+# - --profile NAME runs ONE command against a non-active profile.
 
 # Fetch any missing HUD country flags from the sheet's Configuration tab
 python3 tools/fetch-flags.py            # adds missing -> src/assets/flags/ (keeps old)
@@ -712,153 +638,17 @@ environment before dispatching to:
   best-effort: any failure prints one notice and the stop continues.
   It also exposes a scene-collection check/switch (`GetSceneCollectionList` / `SetCurrentSceneCollection`): `racecast obs collection [set]`, a warning during `racecast event start`, a line in `racecast event status`, and the Control Center's OBS row. `racecast event start` auto-switches OBS to the active profile's collection by default (`RACECAST_OBS_COLLECTION_SWITCH=0` restores the old warn-only behaviour) — safe because OBS refuses a switch while an output is active and none is active during bring-up; `event takeover` inherits it. The switch runs before the page-refresh hook (it rebuilds every source). The manual `racecast obs collection set` and the Control Center OBS-row button remain the explicit fallback. `racecast event start` also parks OBS on the **Standby** scene after the collection check and the forced page-refresh (Director Guide: start on Standby, then Start Streaming), default-on (`RACECAST_OBS_STANDBY_ON_START=0` opts out); it is best-effort and **never cuts a live program** — the switch is skipped when OBS output is already active (`obs_ws.switch_to_scene_if_idle`), which also makes a mid-event `event takeover` onto a streaming OBS a no-op. The canonical product name is `EXPECTED_SCENE_COLLECTION` (`GT Racing Endurance`), which mirrors the `name` field of `src/obs/GT_Racing_Endurance.json`; a localized per-league collection defaults to `GT Racing Endurance — <league>` (`PRODUCT_COLLECTION_PREFIX` + the profile name, unless the profile sets `OBS_COLLECTION`), so several leagues keep separate collections in one OBS. `racecast obs collection set` switches to the active profile's expected name.
 
-### Control Center (`src/racecast_ui.py` + `src/ui/`)
-`racecast ui` serves a local web app (`src/ui/ui_server.py`, port 8089 /
-`RACECAST_UI_PORT`) for dashboard, service control and logs. Two settings surfaces:
-- **Profile view** — switch the active profile, create a new one (new-profile dialog,
-  optionally `--from` an existing one), edit the active league's `profile.env`, style the
-  per-league overlays in the **visual overlay builder** (drag/resize the HUD/Timer slots
-  on a same-origin Shadow-DOM canvas over `Overlay.png`, with a fonts uploader and an
-  advanced-CSS escape hatch), download profile-scoped graphics/media, and manage the
-  **crew roster** in the **crew editor** (reads the league Sheet's `Crew` tab via the
-  relay's `/crew/data`; writes per-row director/producer flags back via the `crew`
-  webhook action — routes `/api/crew`, `/api/crew/delete`). The Crew tab
-  (`Name | Commentator | Director | Producer | Discord` header in row 1) and the `crew`
-  Apps Script action are a league Sheet-side coordination item (see `Sheet-Webhook` wiki
-  page); without them roles degrade gracefully and the editor surfaces an
-  outdated-script banner. Routes:
-  `/api/profiles`, `/api/profile/{use,new,env}`, `/api/overlay`,
-  `/api/overlay/{slots,layout,fonts,bg,font/<name>}`, `/api/crew`, `/api/crew/delete`.
-- **General Settings** — machine-wide knobs: the `.env` editor (`RACECAST_*` vars),
-  cookie refresh, and the **overlay font library** (`runtime/fonts/`, shared across
-  leagues). A curated baseline set (`overlay_build.GOOGLE_FONTS`) is downloaded at build
-  time into `fonts.zip`, bundled INTO each binary, and extracted into `runtime/fonts/` on
-  first start by `ensure_bundled_fonts()` (stamp-gated, only-if-absent, zip-slip-safe — so
-  every install has fonts without a manual download, and `racecast update` refreshes the
-  set). Operators add further families by name via the Settings typeahead (routes
-  `/api/fonts`, `/api/fonts/{catalog,download,delete}`); `tools/fetch-fonts.py` is the
-  maintainer tool that builds the zip. A font a league's design uses is copied into that
-  profile's `overlay/fonts/` on save (`_materialize_overlay_fonts`), so `profile export`
-  stays self-contained; the relay/canvas serve it locally (no broadcast-time CDN).
-
-`tools/` is maintainer-only (build, tokenize, sync) and is not shipped to producers.
-
-### Standalone binary (PyInstaller)
-`tools/build-binary.py` freezes `src/racecast.py` into the `racecast` executable and
-`src/racecast_ui.py` into the windowed `racecast-ui` (Control Center launcher) — one
-pair per OS; the whole `src/` tree ships as bundled data under `sys._MEIPASS/src/`, so
-here-relative path resolution keeps working. In frozen mode (`sys.frozen`), `racecast`
-runs bundled scripts **in-process** (importlib + patched argv, string `sys.exit`
-payloads go to stderr) and daemons re-invoke the binary itself (`racecast relay run`,
-hidden `racecast streams run-feed`) with `PYINSTALLER_RESET_ENVIRONMENT=1` so each
-child extracts its own bundle and outlives the parent. `runtime/`, `profiles/` and
-`.env` live next to the binary — keep it in its own folder.
-`services.py`/`companion_common.py` carry the per-OS process control (Windows: ctypes
-PID probe — `os.kill(pid, 0)` would TERMINATE the target there — taskkill/tasklist,
-Companion.exe discovery + `RACECAST_COMPANION_EXE` override in `.env`; native Linux:
-companion-pi systemd service via `companion_linux.py`; other Linux setups — WSL/Docker/
-manual AppImage — remain manual, matching the pre-existing guidance).
-Releases: merge the standing **release-please** Release PR (or push a `v*` tag manually
-— both work) — `.github/workflows/release.yml` tests, builds, smoke-tests and uploads
-`racecast-windows.zip` / `racecast-macos.tar.gz` / `racecast-linux.tar.gz` /
-`racecast-linux-arm64.tar.gz` (each contains the `racecast` binary + `.env.example`;
-on first run the frozen binary copies it to `.env` — see `ensure_env_file`). The two
-Linux archives are built natively on the `ubuntu-latest` (x86-64) and
-`ubuntu-24.04-arm` (ARM64) matrix runners; `update.asset_name()` picks the right one
-per `platform.machine()` so a self-updating ARM64 binary never fetches the x86-64
-archive. release-please tags via GITHUB_TOKEN, which cannot
-trigger on-tag workflows, so `release-please.yml` dispatches `release.yml`
-explicitly. `ci.yml` runs the suite on all
-three OSes for every PR. Unsigned binaries: SmartScreen/Gatekeeper show a
-one-time "run anyway" warning.
-
-A separate **preview** channel (`.github/workflows/preview.yml`, helper
-`tools/preview_meta.py`) publishes pre-release binaries for testing ahead of a
-real release — triggered by the `preview` label on a PR or by `workflow_dispatch`
-against a ref. Its tags are `preview-*` (never `v*`), so it never triggers
-`release.yml` or release-please; `preview-cleanup.yml` deletes a PR's pre-release
-on close.
-
-### End-to-end / regression harness (`tools/e2e.py` + `tools/e2e_checks.py`)
-The integration **outer loop** (issue #199): it stands up the relay + Control Center
-from `src/` as owned subprocesses and asserts the **live HTTP surface** — the class of
-bug the unit suite (pure functions) can't catch. Maintainer-only (`tools/`, not shipped).
-`tools/e2e_checks.py` is the pure, import-testable assertion core (free-port,
-synthetic-CSV builder, tolerant `http_request`, the `CheckResult`/`run_checks` registry,
-the `check_*` callables, `SYNTHETIC_CHECKS`/`REAL_LEAGUE_CHECKS`), unit-tested in
-`tests/test_e2e.py`; `tools/e2e.py` owns process lifecycle (spawn, readiness-poll,
-guaranteed `finally` teardown — no leaked relays/UI even on failure). Two modes:
-- **Synthetic** (`tools/e2e.py`, the default, **CI-runnable**): an ephemeral temp profile +
-  an in-process CSV schedule server via `--sheet-csv-url`; spawns an enabled relay + a
-  cockpit-disabled relay + the Control Center on free `127.0.0.1` ports; runs 10 checks.
-  No real Sheet/cookies/OBS/Tailscale. Because the relay **hard-exits at startup without
-  `yt-dlp`/`streamlink` on PATH** (`racecast-feeds.py`), synthetic mode writes **no-op
-  stubs** for `yt-dlp`/`streamlink`/`ffmpeg`/`deno` into the temp dir and prepends them
-  to the relay's PATH (the fake schedule URLs are never pulled). The dedicated **`e2e`
-  CI job** (`.github/workflows/ci.yml`, ubuntu) runs exactly this; the matrix `test` job
-  already runs `tests/test_e2e.py` via `run-tests.py`.
-- **Real-league** (`--real-league NAME`, **local only — refuses under CI**): drives the
-  copied real-league dev build (real Sheet/cookies/`CONSOLE_SECRET`), minting a token for
-  a real streamer pulled live from `/schedule/data`. Runs a **non-mutating** subset
-  (`REAL_LEAGUE_CHECKS`): it **excludes** `check_submission_pending` (a `POST
-  /cockpit/submit` could ping the league's real Discord webhook) and
-  `check_cockpit_404_when_disabled` (needs a second relay); `check_chat_round_trip` is
-  included (the crew chat is relay-local).
-
-The checks regression-guard the four #191 cockpit bugs (env-clobber via the real
-`racecast._set_env_key`, timer `—`, double-"stint" tally, flat `/cockpit/data` shape)
-and the #193 own-row submission. Optional **rendered checks** (`--playwright`) use the
-Playwright **Python library** (not the MCP) and SKIP when unavailable (CI omits the
-flag). Visual helpers, all local-only: `--headed`/`--slowmo` (visible browser),
-`--keep` (leave the services up + print the live URLs incl. the cockpit token), and
-`--shots DIR` (write a screenshot of each surface — a reproducible, MCP-free tour;
-the Control Center shot shows the machine's Tailscale IP, so it is a **local artifact,
-never committed**). The local real-league run (copy the deployed instance's
-profile/runtime/cookies in, enable cockpit on the copy, set up a Playwright venv, run,
-tear down) is captured in the **`racecast-e2e`** skill, which builds on the
-**`racecast-local-uat`** skill's data copy-in. Spec/plan:
-`docs/superpowers/{specs,plans}/2026-06-17-e2e-regression-harness*.md`.
-
-### Static mode (`src/scripts/`) — the simpler alternative
-`loopstream.py` keeps one streamlink server alive for one public channel (YouTube or
-Twitch); `start-streams.py` / `stop-streams.py` manage a set of them with PID/log files
-under `runtime/static/`. This is the fallback for **public** channels only — no yt-dlp
-bot-check, no unlisted streams; the real unlisted-stream flow is the relay. YouTube is
-served via Streamlink's direct HLS path; Twitch is served via Streamlink's Twitch plugin
-(low-latency, same flags as the relay — `STREAMLINK_TWITCH` is **duplicated from
-`racecast-feeds.py` and pinned byte-identical by a `getsource` cross-check in
-`tests/test_streams.py`** to prevent drift). Gated Twitch feeds use the same machine-level
-`twitch-cookies.txt` as the relay. Each feed entry may be a YouTube channel ID (UC…) or
-a full `youtube.com`/`twitch.tv` URL; invalid channels are rejected at load time by
-`is_channel()` (SSRF guard). Invoke via `racecast streams start/stop` —
-`start-streams.py`/`stop-streams.py` are logic modules, not the operator entrypoint.
-`stop-streams.py` validates a PID actually belongs to a feed process before killing.
-
-### Companion remote-access helpers (`src/scripts/`)
-`companion_common.py` (tests `tests/test_companion.py`) contains the pure logic that binds
-**Bitfocus Companion**'s admin/web-buttons server to this machine's Tailscale IP so a tablet
-can open `http://<tailscale-ip>:<port>/tablet` over the tailnet — same plug-&-play model as
-the relay's `--bind auto`, and likewise **not** the LAN. It auto-detects the Tailscale IP
-(Tailscale detection/control lives in `src/scripts/tailscale.py`; its `detect_tailscale_ip` is duplicated in the standalone relay — keep those two in sync), and — only while Companion
-is stopped, with a `.racecast-bak` backup — sets `bind_ip` in Companion's `config.json`
-(`~/Library/Application Support/companion/config.json` on macOS; the GUI launcher reads
-it as `--admin-address`). Windows + macOS automated (Windows: Companion.exe discovery +
-`RACECAST_COMPANION_EXE` override in `.env`); native Linux: companion-pi **systemd
-service**, controlled by `companion_linux.py` — `racecast companion start/stop` invoke
-`systemctl` via a root bind helper that pins `--admin-address` to the Tailscale IP, or
-`127.0.0.1` when the tailnet is down (never `0.0.0.0`, matching the relay's `--bind
-auto` rule). This requires a one-time `racecast companion enable-control` (installs a
-systemd `ExecStart` drop-in, the `/usr/local/sbin/racecast-companion-bind` root helper,
-and a visudo-validated NOPASSWD sudoers rule); `install-apps` runs it automatically
-after a Linux Companion install. Re-run `enable-control` after a structural
-`sudo companion-update` that changes the node launch line. Other Linux setups
-(WSL/Docker on the host, manual AppImage) keep the manual path. Tests:
-`tests/test_companion_linux.py`. Invoke via `racecast companion start/stop`. **Important:**
-binding only controls *where* Companion listens — Companion serves `/tablet` and the admin
-GUI on one port + one shared socket API (its admin password is a casual deterrent, not a
-boundary), so isolating the admin from directors is a **Tailscale-ACL** job (restrict who
-reaches the port), not something these scripts can do. Editing `config.json` is
-unsupported-but-stable; re-check after Companion upgrades.
+### Subsystems documented next to their code
+These sections moved out of this always-loaded file into nested `CLAUDE.md` files that
+load only when you work in the matching directory — read them before changing that area:
+- **Control Center** (`racecast ui`, profile/settings views, overlay builder, crew editor,
+  font library) → `src/ui/CLAUDE.md`
+- **Standalone binary + release pipeline** (PyInstaller, frozen-mode behaviour, the
+  release/preview workflows) and the **e2e regression harness** (`tools/e2e.py`) →
+  `tools/CLAUDE.md`
+- **Static/public-stream mode** (`loopstream.py`, `start-streams.py`) and the **Companion
+  remote-access helpers** (`companion_common.py`, `companion_linux.py`) →
+  `src/scripts/CLAUDE.md`
 
 ## Docs
 
