@@ -224,6 +224,37 @@ def t_stop_commands_per_os():
         ["taskkill", "/F", "/T", "/PID", "123"]
 
 
+def t_daemon_bundle_env_redirects_the_extraction_dir_posix():
+    # A frozen daemon runs for days; /tmp gets reaped under it. Point the
+    # bootloader at a durable dir instead — free here, because the child is
+    # starting anyway and unpacks exactly once either way.
+    env = sv.daemon_bundle_env({"PATH": "/usr/bin", "TMPDIR": "/var/folders/x/T"},
+                               "/opt/rc/runtime/bundle", os_name="posix")
+    assert env["TMPDIR"] == "/opt/rc/runtime/bundle"
+    assert env["PATH"] == "/usr/bin"          # everything else untouched
+    assert "TEMP" not in env
+
+
+def t_daemon_bundle_env_sets_both_windows_vars():
+    env = sv.daemon_bundle_env({"TEMP": r"C:\Users\x\AppData\Local\Temp"},
+                               r"C:\rc\runtime\bundle", os_name="nt")
+    assert env["TEMP"] == r"C:\rc\runtime\bundle"
+    assert env["TMP"] == r"C:\rc\runtime\bundle"
+
+
+def t_daemon_bundle_env_without_a_dir_is_a_no_op():
+    src = {"TMPDIR": "/var/folders/x/T"}
+    assert sv.daemon_bundle_env(src, "", os_name="posix") == src
+    assert sv.daemon_bundle_env(src, None, os_name="posix") == src
+
+
+def t_daemon_bundle_env_does_not_mutate_the_input():
+    src = {"TMPDIR": "/old"}
+    out = sv.daemon_bundle_env(src, "/new", os_name="posix")
+    assert src == {"TMPDIR": "/old"}, src
+    assert out["TMPDIR"] == "/new"
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         for name, fn in sorted(globals().items()):

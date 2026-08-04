@@ -95,6 +95,10 @@ def build_target(launcher, workdir, version_file, sep, entry, name, windowed):
            "--hidden-import", "speedtest",
            "--hidden-import", "install_apps", "--hidden-import", "obs_ws",
            "--hidden-import", "overlay_build",
+           # imported by src/ui/ui_server.py, which is itself loaded by path —
+           # PyInstaller's scan never sees it. Guarded by
+           # tests/test_racecast.py::t_path_loaded_module_imports_are_frozen.
+           "--hidden-import", "bundle_cache",
            "--hidden-import", "placeholders",
            "--hidden-import", "tailscale", "--hidden-import", "init_setup",
            "--hidden-import", "native_dialog",

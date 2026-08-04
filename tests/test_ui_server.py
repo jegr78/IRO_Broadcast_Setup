@@ -661,6 +661,42 @@ def t_root_serves_the_page():
         httpd.shutdown()
 
 
+def t_page_survives_its_bundled_file_being_deleted():
+    # The 14-day-uptime failure: a frozen build unpacks the page into the OS
+    # temp dir, the OS reaps that dir under the running process, and every
+    # request answered "page not bundled". Serving from memory fixes it.
+    import shutil as _shutil
+    tmp = tempfile.mkdtemp()
+    page = os.path.join(tmp, "control-center.html")
+    _shutil.copyfile(os.path.join(ROOT, "src", "ui", "control-center.html"), page)
+    ctx = _ctx()
+    ctx["page_path"] = page
+    httpd, port = _serve(ctx)
+    try:
+        code, body = _get(port, "/")
+        assert code == 200 and b"racecast Control Center" in body
+        os.unlink(page)                       # the OS cleaner strikes
+        code, body = _get(port, "/")
+        assert code == 200, code
+        assert b"racecast Control Center" in body
+    finally:
+        httpd.shutdown()
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def t_missing_page_reports_how_to_recover():
+    # Never read, never on disk: the operator must learn that a restart helps.
+    ctx = _ctx()
+    ctx["page_path"] = os.path.join(tempfile.gettempdir(), "racecast-no-such.html")
+    httpd, port = _serve(ctx)
+    try:
+        code, body = _get(port, "/")
+        assert code == 404, code
+        assert b"restart" in body.lower(), body
+    finally:
+        httpd.shutdown()
+
+
 def t_apps_view_hides_tailscale_gui_buttons_on_linux():
     # Linux Tailscale has no GUI app — the apps view must drop the GUI-only
     # Start/Stop there (via appActions, gated on lastStatus.os) and render via
