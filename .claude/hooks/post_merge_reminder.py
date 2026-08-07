@@ -8,12 +8,23 @@ it is ignored the reminder fires on *every* Bash call (curl, ls, git …), which
 is noise and, worse, injects a "a merge just completed" instruction when nothing
 was merged. Deciding here on `.tool_input.command` is version-independent.
 
+The match is anchored to a COMMAND POSITION rather than being a substring
+search. A plain `"gh pr merge" in cmd` fires for any command that merely quotes
+the phrase — measured in the yt-shorts port of this hook, where its own test
+payload (an `echo` of a JSON string) injected "a merge just completed" with
+nothing merged. That is the same false trigger the paragraph above rejects the
+`if` field for, one level down.
+
 Reads the PostToolUse JSON payload on stdin; on a match, prints the
 additionalContext stdout JSON that Claude Code injects into the transcript.
 Emits nothing (exit 0) for any other command.
 """
 import json
+import re
 import sys
+
+# Start of string, or after a shell separator — never inside a quoted string.
+MERGE_RE = re.compile(r"(?:^|[;&|(]\s*|\n\s*)gh\s+pr\s+merge\b")
 
 REMINDER = (
     "A merge to main just completed. Before treating the task as done, do the "
@@ -39,7 +50,7 @@ def main():
         return 0
     cmd = (data.get("tool_input") or {}).get("command") or ""
     # Only fire for an actual PR merge, not every Bash call.
-    if "gh pr merge" not in cmd:
+    if not MERGE_RE.search(cmd):
         return 0
     print(json.dumps({
         "hookSpecificOutput": {
