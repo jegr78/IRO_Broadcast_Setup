@@ -53,6 +53,24 @@ def t_does_not_fire_on_an_unrelated_command():
     assert not _fires("git merge main")
 
 
+def t_does_not_fire_on_a_heredoc_body():
+    # The second measured false positive: a commit message and a PR body that
+    # quote the compound form as an EXAMPLE. Shell syntax does not apply inside
+    # a heredoc, so anchoring to a separator cannot help here.
+    assert not _fires("git commit -F - <<'MSG'\nSee `cd x && gh pr merge`.\nMSG")
+    assert not _fires('gh pr create --body-file - <<"BODY"\n'
+                      "set -e; gh pr merge 1\nBODY")
+
+
+def t_still_fires_for_a_command_after_the_heredoc_ends():
+    # The over-dropping guard: only the BODY goes, not the rest of the command.
+    assert _fires("cat <<'EOF'\nnothing to see\nEOF\ngh pr merge 19")
+
+
+def t_an_arithmetic_shift_does_not_open_a_heredoc():
+    assert _fires("python3 -c 'print(1 << 3)'\ngh pr merge 19")
+
+
 def t_survives_a_payload_it_cannot_read():
     stdin, stdout = sys.stdin, sys.stdout
     sys.stdin, sys.stdout = io.StringIO("not json"), io.StringIO()
