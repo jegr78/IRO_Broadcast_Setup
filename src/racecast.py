@@ -7382,25 +7382,36 @@ def smoketest_cmd(rest):
 
     title = "Smoketest " + time.strftime("%Y-%m-%d %H:%M")
     say(f"\nEvent — starting as {title!r}")
-    started = False
+    # The teardown below is UNCONDITIONAL: `event start` brings services up one by
+    # one and exits non-zero when its readiness report has a FAIL, so a partial
+    # stack (relay, Companion, an enabled Funnel) is already live by then. Arming
+    # the teardown only on a successful bring-up once left all three running —
+    # including the PUBLIC Funnel — with no verdict printed at all.
     try:
-        event_start(["--title", title])
-        started = True
-        say("\nRundown")
-        results += _smoke_rundown(say)
-        say("\nObservation")
-        results += _smoke_observe(minutes, say)
+        try:
+            event_start(["--title", title])
+        except SystemExit as exc:
+            # Not a smoke-test failure by itself: the readiness report names what
+            # is missing, and the rundown below measures what that costs.
+            results.append(sm.Result("event_start", sm.FAIL, str(exc)[:160]
+                                     or "event start reported NOT READY"))
+            say(f"  event start aborted: {exc}")
+        else:
+            say("\nRundown")
+            results += _smoke_rundown(say)
+            say("\nObservation")
+            results += _smoke_observe(minutes, say)
     finally:
-        # An aborted run must never leave a live relay or a switched OBS behind.
-        if started:
-            say("\nEvent — stopping")
-            try:
-                event_stop([])
-            except BaseException as exc:         # noqa: BLE001 — incl. SystemExit
-                # The run is substantively finished here; letting a teardown exit
-                # propagate would drop the verdict, the history line AND the exit
-                # code, which is the one thing the operator came for.
-                say(f"  teardown note: {exc}")
+        # An aborted run must never leave a live relay, an open Funnel or a
+        # switched OBS behind.
+        say("\nEvent — stopping")
+        try:
+            event_stop([])
+        except BaseException as exc:             # noqa: BLE001 — incl. SystemExit
+            # The run is substantively finished here; letting a teardown exit
+            # propagate would drop the verdict, the history line AND the exit
+            # code, which is the one thing the operator came for.
+            say(f"  teardown note: {exc}")
     return _smoke_finish(results, tools, sources, minutes, as_json, lines)
 
 

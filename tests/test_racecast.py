@@ -4490,6 +4490,60 @@ def t_smoke_capture_separates_a_missing_tool_from_a_broken_one():
     assert rc == 127 and "not found" in txt
 
 
+def t_smoketest_tears_down_even_when_event_start_aborts():
+    """`event start` exits non-zero when its readiness report has a FAIL — but by
+    then the relay, Companion and a PUBLIC Funnel are already up. Arming the
+    teardown only on a successful bring-up left all three running on the box,
+    with no verdict printed at all."""
+    calls = []
+    saved = {name: getattr(m, name) for name in
+             ("_active_profile_name", "_relay_is_alive", "_smoke_confirm",
+              "_smoke_fingerprint", "_smoke_vocab", "_smoke_discover",
+              "_smoke_js_runtime", "_smoke_schedule_rows", "_smoke_write_schedule",
+              "_smoke_append_history", "event_start", "event_stop")}
+    saved_env = {k: os.environ.get(k) for k in
+                 ("RACECAST_SHEET_ID", "RACECAST_SHEET_PUSH_URL")}
+    os.environ["RACECAST_SHEET_ID"] = "sheet"
+    os.environ["RACECAST_SHEET_PUSH_URL"] = "https://example.invalid/w"
+    m._active_profile_name = lambda *a, **k: "testing"
+    m._relay_is_alive = lambda *a, **k: False
+    m._smoke_confirm = lambda *a, **k: None
+    m._smoke_fingerprint = lambda: {"yt-dlp": "1", "js_runtime": "unknown"}
+    m._smoke_vocab = lambda sheet_id: (["q"], ["c"])
+    m._smoke_discover = lambda *a, **k: (["https://www.youtube.com/watch?v=1",
+                                          "https://www.youtube.com/watch?v=2"],
+                                         ["https://www.twitch.tv/x"], [])
+    m._smoke_js_runtime = lambda url: "deno-x"
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"], ["a", "b"],
+                                               ["c", "d"], ["e", "f"]]
+    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_append_history = lambda entry: calls.append("history")
+
+    def _boom(rest):
+        calls.append("start")
+        raise SystemExit("NOT READY — resolve the FAIL items above.")
+
+    m.event_start = _boom
+    m.event_stop = lambda rest: calls.append("stop")
+    try:
+        try:
+            m.smoketest_cmd(["--json", "--minutes", "1"])
+        except SystemExit as exc:
+            calls.append(f"exit{exc.code}")
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert "start" in calls, calls
+    assert "stop" in calls, "teardown skipped — services left running"
+    assert "history" in calls, "verdict/history lost"
+    assert "exit1" in calls, calls
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
