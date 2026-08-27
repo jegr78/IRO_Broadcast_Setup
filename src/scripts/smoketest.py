@@ -459,11 +459,19 @@ def health_level(status):
     return str((((status or {}).get("health") or {}).get("level")) or "").lower()
 
 
+# The relay's own vocabulary (_HEALTH_LABEL): green=OK, yellow=DEGRADED,
+# red=CRITICAL. Pinned by a test against that dict — an earlier version also
+# accepted "drop", a value the relay never emits, which reads like coverage
+# while checking nothing.
+HEALTH_RED = "red"
+
+
 def is_drop_sample(status):
-    """A red health sample. A feed that just dropped is a SILENT blip until it
-    stays down past the settle window, so a single reconnect that self-heals must
-    not count — only the level the relay itself has settled on."""
-    return health_level(status) in ("red", "drop")
+    """A CRITICAL health sample. A feed that just dropped is a SILENT blip until
+    it stays down past the settle window, so a single reconnect that self-heals
+    must not count — only the level the relay itself has settled on. DEGRADED
+    (yellow) is deliberately not a drop: it is the warning before the loss."""
+    return health_level(status) == HEALTH_RED
 
 
 # ----------------------------------------------------------------- verdict

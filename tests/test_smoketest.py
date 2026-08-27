@@ -305,6 +305,20 @@ def t_step_error_verdict_treats_a_dead_obs_like_the_read_backs():
     assert st.step_error_verdict("boom")[0] == st.FAIL
 
 
+def t_health_vocabulary_matches_the_relay():
+    """Drift guard: the relay's _HEALTH_LABEL is the vocabulary, not my memory."""
+    with open(os.path.join(ROOT, "src", "relay", "racecast-feeds.py"),
+              encoding="utf-8") as fh:
+        m = re.search(r"_HEALTH_LABEL = \{([^}]+)\}", fh.read())
+    assert m, "the relay's health labels moved — re-point this guard"
+    levels = set(re.findall(r'"([a-z]+)":', m.group(1)))
+    assert levels == {"green", "yellow", "red"}, levels
+    assert st.HEALTH_RED in levels
+    assert st.is_drop_sample({"health": {"level": "red"}})
+    assert not st.is_drop_sample({"health": {"level": "yellow"}})
+    assert not st.is_drop_sample({})
+
+
 def t_program_audio_skips_when_the_endpoint_is_absent():
     """Fan-out off is a machine setting; blaming ffmpeg for it would be a false red."""
     assert st.program_audio_verdict(64000)[0] == st.PASS
