@@ -6779,10 +6779,17 @@ def _smoke_post_json(url, obj, headers=None, timeout=20):
 
 
 def _smoke_capture(argv, timeout=90):
-    """(returncode, combined output) for a probe subprocess. Never raises."""
+    """(returncode, combined output) for a probe subprocess. Never raises.
+
+    `env=sv.external_tool_env()` is not optional here: yt-dlp and streamlink run
+    under the SYSTEM python, and the frozen bootloader leaves our bundled
+    libcrypto on their library path, so they die on import. Without it the
+    fingerprint reported both as missing on every frozen run — which is every
+    run that matters. Returns None off the frozen binary, leaving source runs
+    untouched. Same call the preflight tool check and the daemon spawns make."""
     try:
         p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                           check=False)
+                           check=False, env=sv.external_tool_env())
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except FileNotFoundError:
         return 127, f"{argv[0]}: not found"
@@ -6801,7 +6808,10 @@ def _smoke_fingerprint():
                        ("ffmpeg", ["-version"]), ("deno", ["--version"])):
         rc, txt = _smoke_capture([name] + args, timeout=30)
         first = (txt.strip().splitlines() or [""])[0].strip()
-        out[name] = first if rc == 0 else "MISSING"
+        # Distinguish absent from broken: reporting a tool that IS installed as
+        # "not on PATH" sends the operator hunting for the wrong problem.
+        out[name] = first if rc == 0 else ("MISSING" if rc == 127
+                                           else f"BROKEN (exit {rc})")
     out["js_runtime"] = "unknown"
     return out
 
@@ -7299,8 +7309,10 @@ def smoketest_cmd(rest):
     tools = _smoke_fingerprint()
     for name, ver in tools.items():
         say(f"  {name:<11s} {ver}")
-        if ver == "MISSING":
-            results.append(sm.Result(f"tool_{name}", sm.FAIL, "not on PATH"))
+        if ver == "MISSING" or ver.startswith("BROKEN"):
+            results.append(sm.Result(f"tool_{name}", sm.FAIL,
+                                     "not on PATH" if ver == "MISSING"
+                                     else "on PATH but fails to run"))
 
     say("\nDiscovery")
     queries, categories = _smoke_vocab(sheet_id)

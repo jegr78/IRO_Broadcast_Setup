@@ -4451,6 +4451,45 @@ def t_smoke_relay_post_falls_back_to_the_status_code():
     assert "500" in got["error"], got
 
 
+def t_smoke_capture_de_pyinstallers_the_child_environment():
+    """yt-dlp and streamlink run under the SYSTEM python, and the frozen
+    bootloader puts our bundled libcrypto on their library path — they then die
+    and the fingerprint reports them as missing tools. Found on the box: the
+    first real run said "yt-dlp: not on PATH" while /usr/bin/yt-dlp worked fine.
+    services.external_tool_env() is the house fix and is None off the frozen
+    binary, so a source run is unaffected."""
+    seen = {}
+    saved_run, saved_env = m.subprocess.run, m.sv.external_tool_env
+    sentinel = {"LD_LIBRARY_PATH": "/usr/lib"}
+
+    class _P:
+        returncode, stdout, stderr = 0, "ok", ""
+
+    m.sv.external_tool_env = lambda *a, **k: sentinel
+    m.subprocess.run = lambda argv, **kw: seen.update(kw) or _P()
+    try:
+        rc, txt = m._smoke_capture(["yt-dlp", "--version"])
+    finally:
+        m.subprocess.run, m.sv.external_tool_env = saved_run, saved_env
+    assert rc == 0 and txt == "ok"
+    assert seen.get("env") is sentinel, seen.get("env")
+
+
+def t_smoke_capture_separates_a_missing_tool_from_a_broken_one():
+    """'not on PATH' sent me chasing a PATH problem that did not exist."""
+    saved = m.subprocess.run
+
+    def _boom(argv, **kw):
+        raise FileNotFoundError(argv[0])
+
+    m.subprocess.run = _boom
+    try:
+        rc, txt = m._smoke_capture(["nope", "--version"])
+    finally:
+        m.subprocess.run = saved
+    assert rc == 127 and "not found" in txt
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
