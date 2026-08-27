@@ -32,6 +32,7 @@
   racecast freeport [PORT...] [--force]       # free a stuck feed port (default 53001-53003); kills orphaned holders, refuses a running relay/streams
   racecast device-scan [--webcam VAL] [--capture VAL] [--mic VAL]  # enumerate OBS video-capture devices + microphones and save the pick(s) to .env (interactive when no flags given)
   racecast gt7-discover [--save] [--print] [--timeout N] [--pick I]  # find the PS4/PS5 running GT7 and save its IP
+  racecast smoketest [--minutes N] [--json] [--force]   # post-update check: real event + director rundown against discovered live streams
   racecast preflight | speedtest [--json] | cookies [twitch] [browser] | graphics | media | brands | setup [--out PATH] | install-tools [--yes] [--update] | install-apps [--yes] [--update]
   racecast obs-browser [--yes]               # Linux/ARM64: build & install OBS's Browser Source plugin from source (needed for the relay HUD)
   racecast export companion [--out PATH]     # write the Companion button config
@@ -1050,6 +1051,8 @@ def route(argv):
         return {"kind": "funnel", "rest": rest}
     if cmd == "links":
         return {"kind": "links", "rest": rest}
+    if cmd == "smoketest":
+        return {"kind": "smoketest", "rest": rest}
     if cmd == "backup":
         return {"kind": "backup", "rest": rest}
     if cmd in ONESHOTS:
@@ -6745,6 +6748,567 @@ def _bootstrap(argv):
     return argv
 
 
+# ==================== post-update smoke test (#570) ====================
+# Verifies that the event core still works after a toolchain update (ffmpeg,
+# yt-dlp, streamlink, deno). It drives a REAL event through the normal
+# event_start/event_stop path rather than re-implementing the relay's tool
+# invocations — a re-implementation would only ever test itself. Pure logic
+# (acceptance, the rundown table, verdicts) lives in scripts/smoketest.py.
+# Design: docs/superpowers/specs/2026-08-27-post-update-smoketest-design.md
+
+SMOKE_TAB = "Smoke"                 # optional sheet tab overriding the vocabulary
+SMOKE_ARM_WAIT_S = 60               # a feed must deliver bytes within this after ARM
+SMOKE_STEP_PAUSE_S = 1.5            # let OBS settle before the read-back
+SMOKE_READBACK_S = 120              # sheet CSV must show the new URLs within this
+SMOKE_SEARCH_LIMIT = 10             # candidates pulled per query before filtering
+
+
+def _sm():
+    """scripts/ is on sys.path (frozen: hidden-import in tools/build-binary.py)."""
+    import smoketest
+    return smoketest
+
+
+def _smoke_capture(argv, timeout=90):
+    """(returncode, combined output) for a probe subprocess. Never raises."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                           check=False)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except FileNotFoundError:
+        return 127, f"{argv[0]}: not found"
+    except subprocess.TimeoutExpired:
+        return 124, f"{argv[0]}: timed out after {timeout}s"
+    except OSError as exc:                       # noqa: BLE001 — probe, never fatal
+        return 1, f"{argv[0]}: {exc}"
+
+
+def _smoke_fingerprint():
+    """Tool versions plus yt-dlp's own JS-runtime line. Not a check — the note a
+    red run gets compared against, so "what moved since the last green run" is a
+    diff instead of a guess."""
+    sm = _sm()
+    out = {}
+    for name, args in (("yt-dlp", ["--version"]), ("streamlink", ["--version"]),
+                       ("ffmpeg", ["-version"]), ("deno", ["--version"])):
+        rc, txt = _smoke_capture([name] + args, timeout=30)
+        first = (txt.strip().splitlines() or [""])[0].strip()
+        out[name] = first if rc == 0 else "MISSING"
+    rc, txt = _smoke_capture(
+        ["yt-dlp", "-v", "--simulate", "--no-warnings",
+         "--", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"], timeout=60)
+    out["js_runtime"] = sm.parse_js_runtimes(txt) or "unknown"
+    return out
+
+
+def _smoke_vocab(sheet_id):
+    """(queries, categories) — built-in defaults, overridden by an optional
+    `Smoke` tab (`Platform | Query`) so the vocabulary can change without a
+    release. A missing tab is normal and silent."""
+    sm = _sm()
+    queries, categories = list(sm.YOUTUBE_QUERIES), list(sm.TWITCH_CATEGORIES)
+    import csv
+    if not sheet_id:
+        return queries, categories
+    try:
+        body = http_util.get_bytes(_gviz_csv_url(sheet_id, SMOKE_TAB), timeout=15)
+        rows = list(csv.reader(io.StringIO(body.decode("utf-8", "replace"))))
+    except Exception:                            # noqa: BLE001 — optional tab
+        return queries, categories
+    yt, tw = [], []
+    for row in rows[1:]:
+        if len(row) < 2:
+            continue
+        platform, value = row[0].strip().lower(), row[1].strip()
+        if not value:
+            continue
+        (yt if platform.startswith("you") else tw if platform.startswith("twi")
+         else []).append(value)
+    return (yt or queries), (tw or categories)
+
+
+def _smoke_yt_candidates(query):
+    """Live-filtered YouTube search, flattened. yt-dlp is the reader, so the
+    search path uses the same tool the feed path does."""
+    sm = _sm()
+    rc, txt = _smoke_capture(
+        ["yt-dlp", "--flat-playlist", "--no-warnings", "--playlist-end",
+         str(SMOKE_SEARCH_LIMIT), "--print", "%(url)s\t%(title)s\t%(channel)s",
+         "--", sm.youtube_live_search_url(query)], timeout=120)
+    if rc != 0:
+        return []
+    out = []
+    for line in txt.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0].startswith("http"):
+            out.append({"url": parts[0], "title": parts[1],
+                        "channel": parts[2] if len(parts) > 2 else ""})
+    return out
+
+
+def _smoke_yt_probe(url, cookies):
+    """Resolve a candidate in the relay's OWN command form. Passing this is the
+    proof that the live path works — it is the exact operation the relay runs on
+    air. Returns (height, note)."""
+    sm = _sm()
+    cmd = ["yt-dlp", "-g", "-f", "b[height<=1080]/b", "--no-warnings",
+           "--no-playlist", "--print", "rcq %(height)s %(fps)s"]
+    if cookies and os.path.exists(cookies):
+        cmd += ["--cookies", cookies]
+    cmd += ["--", url]
+    rc, txt = _smoke_capture(cmd, timeout=120)
+    if rc != 0:
+        return None, txt.strip().splitlines()[-1][:160] if txt.strip() else "resolve failed"
+    rcq = sm.parse_rcq(txt)
+    return (rcq[0] if rcq else None), ""
+
+
+def _smoke_twitch_candidates(category):
+    """Live channels in a Twitch category via the public web-player Client-ID —
+    the same one streamlink embeds, so this needs no API key and no new
+    dependency. yt-dlp has no Twitch directory extractor."""
+    sm = _sm()
+    try:
+        data = http_util.post_json(sm.TWITCH_GQL_URL, sm.twitch_category_query(category),
+                            headers={"Client-ID": sm.TWITCH_CLIENT_ID}, timeout=20)
+    except Exception:                            # noqa: BLE001 — discovery is best effort
+        return []
+    game = ((data or {}).get("data") or {}).get("game") or {}
+    out = []
+    for edge in (game.get("streams") or {}).get("edges") or []:
+        node = edge.get("node") or {}
+        login = ((node.get("broadcaster") or {}).get("login") or "").strip()
+        if login:
+            out.append({"login": login, "title": node.get("title") or "",
+                        "viewers": node.get("viewersCount") or 0})
+    return out
+
+
+def _smoke_twitch_probe(login):
+    """streamlink's own view of a channel — plugin, quality ladder, category.
+    Pulls no bytes. Returns (plugin, qualities, category, note)."""
+    rc, txt = _smoke_capture(
+        ["streamlink", "--json", f"https://www.twitch.tv/{login}"], timeout=60)
+    try:
+        data = json.loads(txt)
+    except ValueError:
+        return None, [], "", (txt.strip()[:160] or f"streamlink exit {rc}")
+    if data.get("error"):
+        return None, [], "", str(data["error"])[:160]
+    meta = data.get("metadata") or {}
+    return (data.get("plugin"), list((data.get("streams") or {}).keys()),
+            meta.get("category") or "", "")
+
+
+def _smoke_discover(cookies, queries, categories, say):
+    """(youtube_urls, twitch_urls) — at most MAX_ATTEMPTS_PER_PLATFORM probes per
+    platform. The cap is the brake: an uncapped walk down a poor result list is
+    exactly how the IP gets throttled."""
+    sm = _sm()
+    yt_urls, seen = [], set()
+    attempts = 0
+    for query in queries:
+        if len(yt_urls) >= 2 or attempts >= sm.MAX_ATTEMPTS_PER_PLATFORM:
+            break
+        for cand in _smoke_yt_candidates(query):
+            if len(yt_urls) >= 2 or attempts >= sm.MAX_ATTEMPTS_PER_PLATFORM:
+                break
+            if cand["url"] in seen:
+                continue
+            seen.add(cand["url"])
+            if not sm.topical_match(f"{cand['title']} {cand['channel']}"):
+                continue          # a pre-filter, so an attempt is never spent on a webcam
+            attempts += 1
+            height, note = _smoke_yt_probe(cand["url"], cookies)
+            ok, why = sm.accept_youtube(height, cand["title"], cand["channel"])
+            say(f"  youtube {cand['title'][:44]!r}: "
+                + (f"accepted ({height}p)" if ok else f"rejected — {why or note}"))
+            if ok:
+                yt_urls.append(cand["url"])
+    tw_urls, attempts = [], 0
+    cands = []
+    for category in categories:
+        cands += _smoke_twitch_candidates(category)
+    for cand in sm.rank_by_viewers(cands):
+        if tw_urls or attempts >= sm.MAX_ATTEMPTS_PER_PLATFORM:
+            break
+        attempts += 1
+        plugin, qualities, category, note = _smoke_twitch_probe(cand["login"])
+        ok, why = sm.accept_twitch(plugin, qualities, category)
+        say(f"  twitch {cand['login']!r}: "
+            + (f"accepted ({sm.ladder_max_height(qualities)}p, {category})"
+               if ok else f"rejected — {why or note}"))
+        if ok:
+            tw_urls.append(f"https://www.twitch.tv/{cand['login']}")
+    return yt_urls, tw_urls
+
+
+def _smoke_push(push_url, row, url):
+    """One `schedule` webhook write. Column A ONLY — Streamer and Stint are never
+    sent, mirroring the panel's CLEAR URL button ("keep Streamer + Stint so the
+    slot survives"). Those fields are vocabulary-constrained against the
+    Configuration tab, so a discovered channel name is not a legal value there."""
+    try:
+        body = http_util.post_json(push_url, {"action": "schedule", "row": int(row),
+                                       "url": url}, timeout=30)
+    except Exception as exc:                     # noqa: BLE001 — reported, not raised
+        return False, str(exc)[:160]
+    if isinstance(body, dict) and body.get("ok"):
+        return True, ""
+    return False, str(body)[:160]
+
+
+def _smoke_schedule_urls(sheet_id):
+    """Column A of the Schedule tab as the relay would read it."""
+    import csv
+    body = http_util.get_bytes(_gviz_csv_url(sheet_id, "Schedule"), timeout=20)
+    rows = list(csv.reader(io.StringIO(body.decode("utf-8", "replace"))))
+    return [(r[0].strip() if r else "") for r in rows[1:]]
+
+
+def _smoke_write_schedule(push_url, sheet_id, rows, say):
+    """Clear column A, write the discovered URLs, then read back until the sheet
+    serves them. Clearing first is what makes the read-back conclusive: a stale
+    CSV then still shows an OLD url, which is unambiguous. A timeout is a hard
+    abort — silently testing the previous rows is worse than not testing."""
+    sm = _sm()
+    for row in sm.clear_rows():
+        ok, note = _smoke_push(push_url, row, "")
+        if not ok:
+            return False, f"clearing row {row} failed: {note}"
+    for row, url in rows:
+        ok, note = _smoke_push(push_url, row, url)
+        if not ok:
+            return False, f"writing row {row} failed: {note}"
+    want = {url for _row, url in rows}
+    deadline = time.time() + SMOKE_READBACK_S
+    while time.time() < deadline:
+        try:
+            got = set(u for u in _smoke_schedule_urls(sheet_id) if u)
+        except Exception:                        # noqa: BLE001 — transient, keep polling
+            got = set()
+        if want <= got:
+            say("  schedule read back OK")
+            return True, ""
+        time.sleep(5)
+    return False, (f"the sheet still does not serve the new URLs after "
+                   f"{SMOKE_READBACK_S}s — refusing to test the previous rows")
+
+
+def _smoke_relay_get(path, timeout=15):
+    try:
+        return http_util.get_json(f"http://127.0.0.1:{RELAY_PORT}/{path}", timeout=timeout)
+    except Exception as exc:                     # noqa: BLE001 — reported as a check
+        return {"error": str(exc)[:160]}
+
+
+def _smoke_relay_post(path, body, timeout=20):
+    try:
+        return http_util.post_json(f"http://127.0.0.1:{RELAY_PORT}/{path}", body,
+                            timeout=timeout)
+    except Exception as exc:                     # noqa: BLE001 — reported as a check
+        return {"error": str(exc)[:160]}
+
+
+def _smoke_program_audio_sample(want=16384, timeout=25):
+    """A BOUNDED read of the endless MP3 stream: enough bytes to prove the real
+    ffmpeg encoder produced frames, then disconnect. Reading to EOF would never
+    return, and `?probe=1` only reports that the endpoint exists — it explicitly
+    does not start the encoder, which is the thing an ffmpeg major bump puts in
+    doubt. Returns (bytes, note)."""
+    url = f"http://127.0.0.1:{RELAY_PORT}/preview/program-audio"
+    try:
+        with http_util.open_url(url, timeout=timeout) as resp:
+            return resp.read(want) or b"", ""
+    except http_util.HTTPError as exc:
+        return b"", f"HTTP {exc.code}"
+    except Exception as exc:                     # noqa: BLE001 — reported as a check
+        return b"", str(exc)[:120]
+
+
+def _smoke_feed_bytes(which):
+    """True when the relay reports this feed actually delivering (shape handled
+    by the tested smoketest.feed_serving)."""
+    return _sm().feed_serving(_smoke_relay_get("status"), which)
+
+
+def _smoke_wait_bytes(which, say):
+    deadline = time.time() + SMOKE_ARM_WAIT_S
+    while time.time() < deadline:
+        if _smoke_feed_bytes(which):
+            return True
+        time.sleep(3)
+    say(f"  feed {which} delivered no bytes within {SMOKE_ARM_WAIT_S}s")
+    return False
+
+
+def _smoke_apply(step):
+    """Send one rundown step. Scene first, then visibility, then audio — the
+    order the panel's macros use."""
+    if step.relay:
+        return _smoke_relay_get(step.relay)
+    if step.scene and step.kind == "macro":
+        _smoke_relay_post("obs/scene", {"scene": step.scene})
+    for scene, source in step.show:
+        _smoke_relay_post("obs/source", {"scene": scene, "source": source, "on": True})
+    for scene, source in step.hide:
+        _smoke_relay_post("obs/source", {"scene": scene, "source": source, "on": False})
+    if step.air_audio:
+        return _smoke_relay_post("obs/split-audio", {})
+    for name in step.unmute:
+        _smoke_relay_post("obs/audio", {"input": name, "mute": False})
+    for name in step.mute:
+        _smoke_relay_post("obs/audio", {"input": name, "mute": True})
+    return {"ok": True}
+
+
+def _smoke_rundown(say):
+    """Run the director rundown, reading OBS back after every step."""
+    sm = _sm()
+    results, on_air = [], "Feed A"
+    for i, step in enumerate(sm.RUNDOWN, start=1):
+        name = f"step{i:02d}_{step.label.lower().replace(' ', '_')}"
+        if step.label == "STINT A":
+            on_air = "Feed A"
+        elif step.label == "STINT B":
+            on_air = "Feed B"
+        res = _smoke_apply(step)
+        if isinstance(res, dict) and res.get("error"):
+            results.append(sm.Result(name, sm.FAIL, str(res["error"])[:120]))
+            say(f"  {step.label}: FAILED — {res['error']}")
+            continue
+        if step.wait_for_bytes:
+            which = "B" if "B" in step.label else "A"
+            ok = _smoke_wait_bytes(which, say)
+            results.append(sm.Result(name, sm.severity_for(f"arm_{which.lower()}", ok),
+                                     "" if ok else "no bytes after ARM"))
+            if not ok:
+                continue
+        if step.label == "NEXT":
+            # The handover moves the on-air feed; confirm the relay agrees rather
+            # than assuming the rundown's bookkeeping is right.
+            time.sleep(SMOKE_STEP_PAUSE_S)
+            live = sm.on_air_feed(_smoke_relay_get("status"))
+            moved = live == "Feed B"
+            if live:
+                on_air = live
+            results.append(sm.Result(name, sm.PASS if moved else sm.FAIL,
+                                     f"on air: {live or 'unknown'}"))
+            say(f"  NEXT: on air is now {live or 'unknown'}")
+            continue
+        if not step.scene:
+            results.append(sm.Result(name, sm.PASS, ""))
+            continue
+        time.sleep(SMOKE_STEP_PAUSE_S)
+        observed = _smoke_relay_post("obs/state", sm.state_probe(step, on_air))
+        if observed.get("error"):
+            results.append(sm.Result(name, sm.severity_for("obs_standby", False),
+                                     f"OBS unreadable: {observed['error']}"))
+            continue
+        bad = sm.state_mismatches(sm.expected_after(step, on_air), observed)
+        results.append(sm.Result(name, sm.PASS if not bad else sm.FAIL,
+                                 "; ".join(bad)[:200]))
+        say(f"  {step.label}: " + ("ok" if not bad else "MISMATCH — " + "; ".join(bad)))
+    return results
+
+
+def _smoke_observe(minutes, say):
+    """Watch the live relay for the observation window. Feed bytes, HUD, program
+    audio and the feed logs are toolchain-attributable and fail hard; OBS and
+    Companion degrade to a warning (a headless session is not a regression), and a
+    missing program-audio endpoint skips (see `program_audio_verdict`)."""
+    sm = _sm()
+    results = []
+    mp3, note = _smoke_program_audio_sample()
+    status, detail = sm.program_audio_verdict(len(mp3), note)
+    results.append(sm.Result("program_audio", status, detail))
+    hud = _smoke_relay_get("hud/data")
+    results.append(sm.Result("hud_data", sm.severity_for("hud_data",
+                                                         bool(hud.get("teams") is not None)),
+                             str(hud.get("error") or "")[:120]))
+    deadline = time.time() + minutes * 60
+    drops = 0
+    say(f"  observing for {minutes} min…")
+    while time.time() < deadline:
+        if sm.is_drop_sample(_smoke_relay_get("status")):
+            drops += 1
+        time.sleep(15)
+    results.append(sm.Result("health_no_drop", sm.severity_for("health_no_drop",
+                                                               drops == 0),
+                             "" if drops == 0 else f"{drops} DROP sample(s)"))
+    for which in ("A", "B"):
+        ok = _smoke_feed_bytes(which)
+        results.append(sm.Result(f"feed_{which.lower()}_bytes",
+                                 sm.severity_for(f"feed_{which.lower()}_bytes", ok),
+                                 "" if ok else "no bytes at end of window"))
+    return results
+
+
+def _smoke_history_path():
+    return os.path.join(_runtime_dir(), "smoketest-history.jsonl")
+
+
+def _smoke_append_history(entry):
+    """One JSONL line per run, like runtime/speedtest-history.jsonl. Best effort:
+    a run that produced a verdict must not fail because the log is unwritable."""
+    try:
+        os.makedirs(os.path.dirname(_smoke_history_path()), exist_ok=True)
+        with open(_smoke_history_path(), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:                       # noqa: BLE001 — never fatal
+        print(f"smoketest: history not written ({exc})")
+
+
+def _smoke_minutes(rest):
+    sm = _sm()
+    if "--minutes" not in rest:
+        return sm.DEFAULT_MINUTES
+    i = rest.index("--minutes")
+    if i + 1 >= len(rest):
+        sys.exit("racecast: --minutes requires an integer value")
+    try:
+        return max(1, min(120, int(rest[i + 1])))
+    except ValueError:
+        sys.exit(f"racecast: --minutes must be an integer, got {rest[i + 1]!r}")
+
+
+def _smoke_confirm(profile, rest):
+    """The typed phrase names the profile on purpose: the accident this guards
+    against is the right command in the WRONG league. There is deliberately no
+    --yes bypass — a bypass flag lands in a wrapper script and the guard becomes
+    ceremony."""
+    sm = _sm()
+    phrase = sm.confirm_phrase(profile)
+    print(f"\nThis CLEARS the URL column of the '{profile}' Schedule tab and "
+          f"overwrites rows 1-3.\nType exactly:  {phrase}")
+    try:
+        typed = input("> ")
+    except (EOFError, KeyboardInterrupt):
+        typed = ""
+    if not sm.phrase_ok(profile, typed):
+        sys.exit("racecast: not confirmed — nothing was changed.")
+
+
+def smoketest_cmd(rest):
+    """`racecast smoketest` — post-update verification of the event core.
+
+    Stands up a real event on the active profile with discovered live sources,
+    drives the director rundown against it and asserts every step, then tears the
+    event down again. See the design spec for why this drives the production path
+    instead of re-implementing the tool invocations."""
+    sm = _sm()
+    rest = list(rest)
+    as_json = "--json" in rest
+    minutes = _smoke_minutes(rest)
+    lines = []
+
+    def say(msg):
+        lines.append(msg)
+        if not as_json:
+            print(msg, flush=True)
+
+    profile = _active_profile_name()
+    if not profile:
+        # The typed phrase names the profile — that IS the guard. A generic
+        # fallback name would let you confirm "CLEAR SCHEDULE default" while
+        # standing in a real league, which is the exact accident being guarded
+        # against. No resolvable profile, no run.
+        sys.exit("racecast: no active league profile — pick one with "
+                 "`racecast profile use <name>` or --profile NAME.")
+    sheet_id = os.environ.get("RACECAST_SHEET_ID") or ""
+    push_url = os.environ.get("RACECAST_SHEET_PUSH_URL") or ""
+    if not push_url:
+        sys.exit("racecast: this profile has no SHEET_PUSH_URL — the smoke test "
+                 "needs the webhook to place its discovered streams "
+                 "(wiki: Sheet-Webhook).")
+    # Never probe outward while a broadcast is live: the run pulls real streams
+    # and a 429 mid-event is the most expensive way to lose trust in a tool.
+    if "--force" not in rest and (_relay_is_alive()
+                                  or glob.glob(os.path.join(_streams_static_dir(),
+                                                            "feed_*.pid"))):
+        sys.exit("racecast: a relay or static streams are running — refusing "
+                 "(this would pull streams and switch OBS). Use --force if you "
+                 "are sure nothing is on air.")
+    _smoke_confirm(profile, rest)
+
+    results = []
+    say(f"\nSmoke test — profile '{profile}', {minutes} min observation\n")
+    say("Toolchain")
+    tools = _smoke_fingerprint()
+    for name, ver in tools.items():
+        say(f"  {name:<11s} {ver}")
+        if ver == "MISSING":
+            results.append(sm.Result(f"tool_{name}", sm.FAIL, "not on PATH"))
+
+    say("\nDiscovery")
+    queries, categories = _smoke_vocab(sheet_id)
+    yt_urls, tw_urls = _smoke_discover(_cookies_path(), queries, categories, say)
+    rows = sm.plan_rows(yt_urls, tw_urls)
+    if rows is None:
+        # Not a failure: "nobody suitable is streaming right now" is a fact about
+        # the world, and reddening for it teaches the operator to ignore red.
+        results.append(sm.Result("discovery", sm.SKIP,
+                                 f"found {len(yt_urls)} YouTube + {len(tw_urls)} "
+                                 f"Twitch, need 2 + 1"))
+        return _smoke_finish(results, tools, [], minutes, as_json, lines)
+    sources = [{"row": r, "url": u,
+                "platform": "twitch" if "twitch.tv" in u else "youtube"}
+               for r, u in rows]
+    results.append(sm.Result("discovery", sm.PASS,
+                             ", ".join(f"row {s['row']}: {s['platform']}" for s in sources)))
+
+    say("\nSheet")
+    ok, note = _smoke_write_schedule(push_url, sheet_id, rows, say)
+    if not ok:
+        results.append(sm.Result("sheet_write", sm.FAIL, note))
+        return _smoke_finish(results, tools, sources, minutes, as_json, lines)
+    results.append(sm.Result("sheet_write", sm.PASS, "column A only"))
+
+    title = "Smoketest " + time.strftime("%Y-%m-%d %H:%M")
+    say(f"\nEvent — starting as {title!r}")
+    started = False
+    try:
+        event_start(["--title", title])
+        started = True
+        say("\nRundown")
+        results += _smoke_rundown(say)
+        say("\nObservation")
+        results += _smoke_observe(minutes, say)
+    finally:
+        # An aborted run must never leave a live relay or a switched OBS behind.
+        if started:
+            say("\nEvent — stopping")
+            try:
+                event_stop([])
+            except SystemExit:
+                raise
+            except Exception as exc:             # noqa: BLE001 — teardown is best effort
+                say(f"  teardown note: {exc}")
+    return _smoke_finish(results, tools, sources, minutes, as_json, lines)
+
+
+def _smoke_finish(results, tools, sources, minutes, as_json, lines):
+    """Render the verdict, append the history line, return the exit code."""
+    sm = _sm()
+    summary = sm.summarize(results)
+    entry = sm.history_entry(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), summary["verdict"], tools, sources,
+                             minutes, results)
+    _smoke_append_history(entry)
+    if as_json:
+        print(json.dumps({**entry, "counts": summary["counts"]}, ensure_ascii=False))
+    else:
+        print("\nChecks")
+        for r in results:
+            print(f"  [{r.severity}] {r.name}" + (f" — {r.note}" if r.note else ""))
+        c = summary["counts"]
+        print(f"\nSummary: {c[sm.FAIL]} FAIL, {c[sm.WARN]} WARN, {c[sm.SKIP]} SKIP, "
+              f"{c[sm.PASS]} PASS  ->  {summary['verdict']}")
+        print(f"History: {_smoke_history_path()}")
+    # main() does not act on a returned value (see `oneshot`, which raises), so a
+    # FAIL has to exit non-zero itself — a check that always exits 0 is not a check.
+    raise SystemExit(sm.exit_code(summary["verdict"]))
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     try:
@@ -6795,6 +7359,8 @@ def main(argv=None):
         return funnel_cmd(action["rest"])
     if action["kind"] == "links":
         return links_cmd(action["rest"])
+    if action["kind"] == "smoketest":
+        return smoketest_cmd(action["rest"])
     if action["kind"] == "backup":
         return backup_cmd(action["rest"])
     if action["kind"] == "oneshot":

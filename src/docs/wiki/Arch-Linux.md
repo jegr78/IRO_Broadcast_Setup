@@ -133,6 +133,11 @@ package to the list in `pacman.conf` makes `yay` drop it from `yay -Qua` and ref
 upgrade it — verified by experiment, not assumed. One freeze list protects the whole
 station. See [Rolling release and event days](#rolling-release-and-event-days).
 
+A rolling release moves `ffmpeg`, `yt-dlp`, `streamlink` and `deno` in bulk, and all
+four sit in the feed path. After an upgrade that touched any of them, run the
+[smoke test](Smoke-Test): it stands up a throwaway event against live streams and
+tells you whether the broadcast core still works, before an event day does.
+
 ## 3 — Bitfocus Companion (manual)
 
 Companion is in **no** Arch repository and not in the AUR under a usable name
