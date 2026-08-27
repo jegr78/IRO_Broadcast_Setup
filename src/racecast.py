@@ -3557,9 +3557,16 @@ def _event_launch(ev, app):
         return False
     argv, cwd = cmd
     overrides = ev.launch_env(app, sys.platform)
-    child_env = None
+    # OBS and Discord link the SYSTEM libraries, so they must NOT inherit the
+    # frozen binary's LD_LIBRARY_PATH: it points at our extracted _MEI bundle and
+    # they load our libssl instead, dying with "version `OPENSSL_x.y.z' not
+    # found" before they can write a log — while stderr=DEVNULL hides the reason
+    # and `event start` only ever reports "still not up" (#572). Same call every
+    # other external spawn makes; None off the frozen binary, so a source run is
+    # unchanged.
+    child_env = sv.external_tool_env()
     if overrides:
-        child_env = dict(os.environ)
+        child_env = dict(os.environ if child_env is None else child_env)
         child_env.update(overrides)
         print("{}: targeting the autologin session ({}).".format(
             app, ", ".join("{}={}".format(k, v) for k, v in sorted(overrides.items()))))

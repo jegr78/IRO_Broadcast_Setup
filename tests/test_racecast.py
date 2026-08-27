@@ -4349,6 +4349,76 @@ def t_gt7_discover_cmd_single_save(capsys=None):
     assert writes["ip"] == "192.168.1.42"
 
 
+# ------------------------------------------------- GUI launch environment
+
+def t_event_launch_strips_the_pyinstaller_library_path():
+    """OBS and Discord link the SYSTEM libraries. Handing them the frozen
+    binary's LD_LIBRARY_PATH makes them load our bundled libssl and die with
+    "version `OPENSSL_3.2.0' not found" before they can even write a log — and
+    stderr=DEVNULL hides it, so `event start` only ever says "still not up".
+    services.external_tool_env() is the house fix; this was the one spawn site
+    that skipped it (#572)."""
+    seen = {}
+    saved_popen, saved_env = m.subprocess.Popen, m.sv.external_tool_env
+    clean = {"PATH": "/usr/bin", "DISPLAY": ":0"}    # no LD_LIBRARY_PATH
+
+    class _Ev:
+        @staticmethod
+        def launch_command(app, platform, **kw):
+            return (["/usr/bin/obs"], None)
+
+        @staticmethod
+        def launch_env(app, platform):
+            return {"XDG_RUNTIME_DIR": "/run/user/1000"}
+
+    saved_present = None
+    import install_apps
+    saved_present = install_apps.app_present
+    install_apps.app_present = lambda app, platform: True
+    m.sv.external_tool_env = lambda *a, **k: dict(clean)
+    m.subprocess.Popen = lambda argv, **kw: seen.update(kw) or None
+    try:
+        assert m._event_launch(_Ev, "obs") is True
+    finally:
+        m.subprocess.Popen, m.sv.external_tool_env = saved_popen, saved_env
+        install_apps.app_present = saved_present
+    env = seen.get("env") or {}
+    # NB: never assert with `env` as the message — it dumps the whole process
+    # environment (tokens included) into the test output on failure.
+    assert "LD_LIBRARY_PATH" not in env, "LD_LIBRARY_PATH reached the GUI app"
+    # The session overrides still have to reach the app (PR #560).
+    assert env.get("XDG_RUNTIME_DIR") == "/run/user/1000", "session override lost"
+    assert env.get("DISPLAY") == ":0", "external_tool_env base not used"
+
+
+def t_event_launch_strips_it_even_without_session_overrides():
+    """macOS/Windows have no session overrides, but a frozen parent still puts
+    its bundle on DYLD_/LD_LIBRARY_PATH. Passing env=None there would inherit it."""
+    seen = {}
+    saved_popen, saved_env = m.subprocess.Popen, m.sv.external_tool_env
+    import install_apps
+    saved_present = install_apps.app_present
+
+    class _Ev:
+        @staticmethod
+        def launch_command(app, platform, **kw):
+            return (["/Applications/OBS.app"], None)
+
+        @staticmethod
+        def launch_env(app, platform):
+            return {}
+
+    install_apps.app_present = lambda app, platform: True
+    m.sv.external_tool_env = lambda *a, **k: {"PATH": "/usr/bin"}
+    m.subprocess.Popen = lambda argv, **kw: seen.update(kw) or None
+    try:
+        assert m._event_launch(_Ev, "obs") is True
+    finally:
+        m.subprocess.Popen, m.sv.external_tool_env = saved_popen, saved_env
+        install_apps.app_present = saved_present
+    assert seen.get("env") == {"PATH": "/usr/bin"}, "frozen env not passed through"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
