@@ -138,22 +138,49 @@ def t_rank_twitch_candidates():
 
 # ------------------------------------------------------------ source plan
 
+_HEADED = [["URL", "Streamer", "Stint"],
+           ["https://www.youtube.com/watch?v=a", "JeGr", "Stint 1"],
+           ["", "Bracing1", "Stint 2"],
+           ["https://www.twitch.tv/b", "Kruentis", "Stint 3"]]
+_HEADLESS = [["https://www.youtube.com/watch?v=a", "JeGr"],
+             ["https://www.twitch.tv/b", "Kruentis"]]
+
+
+def t_schedule_data_rows_skips_a_header():
+    """Physical, 1-based, header included — the relay keys /schedule/data the
+    same way ("keyed by physical sheet row"). Assuming data starts at row 1
+    overwrote the live sheet's `URL` header and knocked the tab out of header
+    mode; the run then never read its own writes back."""
+    assert st.schedule_data_rows(_HEADED) == [2, 3, 4]
+    assert st.schedule_data_rows(_HEADLESS) == [1, 2]
+    assert st.schedule_data_rows([]) == []
+    assert st.schedule_data_rows([["URL", "Streamer"]]) == []
+
+
+def t_schedule_urls_reads_the_data_rows_only():
+    got = st.schedule_urls(_HEADED)
+    assert got == {2: "https://www.youtube.com/watch?v=a", 3: "",
+                   4: "https://www.twitch.tv/b"}
+    assert st.schedule_urls(_HEADLESS)[1].endswith("v=a")
+
+
 def t_source_plan_is_yt_twitch_yt():
     # Two concurrent googlevideo pullers throttle (#505); SPLIT must never see two.
     assert st.SOURCE_PLAN == ("youtube", "twitch", "youtube")
-    rows = st.plan_rows(["yt1", "yt2"], ["tw1"])
-    assert rows == [(1, "yt1"), (2, "tw1"), (3, "yt2")]
+    rows = st.plan_rows(["yt1", "yt2"], ["tw1"], [2, 3, 4])
+    assert rows == [(2, "yt1"), (3, "tw1"), (4, "yt2")]
 
 
 def t_plan_rows_needs_every_slot():
-    assert st.plan_rows(["yt1"], ["tw1"]) is None      # only one YouTube source
-    assert st.plan_rows(["yt1", "yt2"], []) is None    # no Twitch source
+    assert st.plan_rows(["yt1"], ["tw1"], [2, 3, 4]) is None    # one YouTube source
+    assert st.plan_rows(["yt1", "yt2"], [], [2, 3, 4]) is None  # no Twitch source
+    assert st.plan_rows(["yt1", "yt2"], ["tw1"], [2, 3]) is None  # sheet too short
 
 
 def t_clear_rows_covers_more_than_it_writes():
-    # Row 4 exists in the sheet and is cleared but never rewritten.
-    assert set(st.clear_rows(4)) == {1, 2, 3, 4}
-    assert set(st.clear_rows(3)) == {1, 2, 3}
+    # One row beyond what gets written, so a stale URL cannot linger below.
+    assert st.clear_rows([2, 3, 4, 5, 6], total=4) == [2, 3, 4, 5]
+    assert st.clear_rows([2, 3], total=4) == [2, 3]        # never invents rows
 
 
 # ----------------------------------------------------------- confirmation

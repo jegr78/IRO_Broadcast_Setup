@@ -7014,21 +7014,21 @@ def _smoke_push(push_url, row, url):
     return False, str(note or "webhook rejected the write")[:160]
 
 
-def _smoke_schedule_urls(sheet_id):
-    """Column A of the Schedule tab as the relay would read it."""
+def _smoke_schedule_rows(sheet_id):
+    """The Schedule tab parsed by csv.reader — the shape smoketest's layout
+    helpers expect. Physical, header included; they locate the URL column."""
     import csv
     body = http_util.get_bytes(_gviz_csv_url(sheet_id, "Schedule"), timeout=20)
-    rows = list(csv.reader(io.StringIO(body.decode("utf-8", "replace"))))
-    return [(r[0].strip() if r else "") for r in rows[1:]]
+    return list(csv.reader(io.StringIO(body.decode("utf-8", "replace"))))
 
 
-def _smoke_write_schedule(push_url, sheet_id, rows, say):
+def _smoke_write_schedule(push_url, sheet_id, rows, clear, say):
     """Clear column A, write the discovered URLs, then read back until the sheet
     serves them. Clearing first is what makes the read-back conclusive: a stale
     CSV then still shows an OLD url, which is unambiguous. A timeout is a hard
     abort — silently testing the previous rows is worse than not testing."""
     sm = _sm()
-    for row in sm.clear_rows():
+    for row in clear:
         ok, note = _smoke_push(push_url, row, "")
         if not ok:
             return False, f"clearing row {row} failed: {note}"
@@ -7040,7 +7040,8 @@ def _smoke_write_schedule(push_url, sheet_id, rows, say):
     deadline = time.time() + SMOKE_READBACK_S
     while time.time() < deadline:
         try:
-            got = set(u for u in _smoke_schedule_urls(sheet_id) if u)
+            served = sm.schedule_urls(_smoke_schedule_rows(sheet_id))
+            got = {u for u in served.values() if u}
         except Exception:                        # noqa: BLE001 — transient, keep polling
             got = set()
         if want <= got:
@@ -7264,7 +7265,7 @@ def _smoke_confirm(profile, rest):
     sm = _sm()
     phrase = sm.confirm_phrase(profile)
     print(f"\nThis CLEARS the URL column of the '{profile}' Schedule tab and "
-          f"overwrites rows 1-3.\nType exactly:  {phrase}")
+          f"overwrites its first stint rows.\nType exactly:  {phrase}")
     try:
         typed = input("> ")
     except (EOFError, KeyboardInterrupt):
@@ -7343,7 +7344,20 @@ def smoketest_cmd(rest):
     # exactly the case that needs it.
     tools["js_runtime"] = _smoke_js_runtime((yt_urls or attempted_yt or [""])[0])
     say(f"  js_runtime  {tools['js_runtime']}")
-    rows = sm.plan_rows(yt_urls, tw_urls)
+    # The stint rows come from the sheet, never from an assumption: a Schedule
+    # tab with a `URL` header starts its data at physical row 2, and writing to
+    # row 1 overwrites that header (which also drops the tab out of header mode).
+    try:
+        data_rows = sm.schedule_data_rows(_smoke_schedule_rows(sheet_id))
+    except Exception as exc:                     # noqa: BLE001 — reported as a check
+        results.append(sm.Result("sheet_layout", sm.FAIL, str(exc)[:160]))
+        return _smoke_finish(results, tools, [], minutes, as_json, lines)
+    if len(data_rows) < len(sm.SOURCE_PLAN):
+        results.append(sm.Result("sheet_layout", sm.FAIL,
+                                 f"the Schedule tab has {len(data_rows)} stint "
+                                 f"row(s), need {len(sm.SOURCE_PLAN)}"))
+        return _smoke_finish(results, tools, [], minutes, as_json, lines)
+    rows = sm.plan_rows(yt_urls, tw_urls, data_rows)
     if rows is None:
         # Not a failure: "nobody suitable is streaming right now" is a fact about
         # the world, and reddening for it teaches the operator to ignore red.
@@ -7357,11 +7371,14 @@ def smoketest_cmd(rest):
                              ", ".join(f"row {s['row']}: {s['platform']}" for s in sources)))
 
     say("\nSheet")
-    ok, note = _smoke_write_schedule(push_url, sheet_id, rows, say)
+    ok, note = _smoke_write_schedule(push_url, sheet_id, rows,
+                                     sm.clear_rows(data_rows), say)
     if not ok:
         results.append(sm.Result("sheet_write", sm.FAIL, note))
         return _smoke_finish(results, tools, sources, minutes, as_json, lines)
-    results.append(sm.Result("sheet_write", sm.PASS, "column A only"))
+    results.append(sm.Result("sheet_write", sm.PASS,
+                             "URL column only, rows "
+                             + ", ".join(str(r) for r, _u in rows)))
 
     title = "Smoketest " + time.strftime("%Y-%m-%d %H:%M")
     say(f"\nEvent — starting as {title!r}")

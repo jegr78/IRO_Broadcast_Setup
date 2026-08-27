@@ -48,7 +48,9 @@ your installed toolchain still works.
    one on Twitch (category listing). Each candidate must resolve at 720p or
    better and be a sim-racing stream before it is used, and at most three
    candidates per platform are probed.
-5. **Writes column A** of the Schedule tab, rows 1-3. Streamer and Stint are
+5. **Writes the URL column** of the Schedule tab's first three stint rows.
+   The rows are located the way the relay locates them (a `URL` header means
+   the data starts at physical row 2), never assumed. Streamer and Stint are
    left untouched, so a foreign stream shows up under your usual names.
 6. Starts a normal event titled `Smoketest <date>` — Tailscale, Discord, relay,
    OBS, Companion, scene collection, Standby, page refresh. Nothing is skipped.

@@ -59,7 +59,12 @@ toolchain is the broadcast box, and that box holds only the two binaries, `.env`
    - At most **three attempts per platform**; then `[SKIP]`, not a failure. Each attempt is
      a real request, and an uncapped walk down the list is how an IP gets throttled.
 5. **Sheet write — column A only.** Clear the Schedule tab's URL column (all rows), then
-   write the three discovered URLs into rows 1-3. **Streamer and Stint are never touched.**
+   write the three discovered URLs into the first three STINT rows. Those rows are
+   located the way the relay locates them (`schedule_layout`: a `URL` header in row 1
+   means the data starts at physical row 2, matching `/schedule/data`'s "keyed by
+   physical sheet row"), never assumed to start at row 1 — assuming that overwrote a
+   real sheet's `URL` header, dropped the tab out of header mode, and made the
+   read-back miss the run's own writes. **Streamer and Stint are never touched.**
    This mirrors the panel's own CLEAR URL button ("Clear the URL ONLY — keep Streamer +
    Stint so the slot survives") and is not merely cosmetic: `_schedule_write` rejects a
    streamer or stint outside the Configuration tab vocabulary (`_reject_off_vocab`), so a

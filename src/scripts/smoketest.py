@@ -169,21 +169,75 @@ def accept_twitch(plugin, qualities, category, categories=TWITCH_CATEGORIES):
 SOURCE_PLAN = ("youtube", "twitch", "youtube")
 
 
-def plan_rows(youtube_urls, twitch_urls):
-    """[(row, url), …] for SOURCE_PLAN, or None when a slot cannot be filled."""
+# Mirrors the relay's SCHEDULE_URL_HEADERS / _parse_rows layout detection. Row
+# numbers are PHYSICAL and 1-based, header included — the same key the relay uses
+# for /schedule/data ("keyed by physical sheet row"). Writing to a hardcoded row 1
+# overwrote a real sheet's `URL` header, which also knocked the tab out of header
+# mode, and the read-back then never saw the run's own writes.
+SCHEDULE_URL_HEADERS = ("url",)
+
+
+def schedule_layout(rows):
+    """(url_column, first_data_row) for a Schedule tab parsed by csv.reader.
+
+    Header mode when row 1 carries a recognized `URL` header — data then starts
+    at physical row 2. Otherwise the URL column is the one holding the most
+    stream URLs and the data starts at row 1.
+    """
+    if not rows:
+        return None, 0
+    header = [(c or "").strip().lower() for c in rows[0]]
+    for name in SCHEDULE_URL_HEADERS:
+        if name in header:
+            return header.index(name), 2
+    best_col, best_cnt = None, 0
+    for col in range(max((len(r) for r in rows), default=0)):
+        cnt = sum(1 for r in rows if len(r) > col and stream_host(r[col].strip()))
+        if cnt > best_cnt:
+            best_col, best_cnt = col, cnt
+    return (best_col, 1) if best_col is not None else (None, 0)
+
+
+def schedule_data_rows(rows):
+    """Physical row numbers of the Schedule tab's data rows (header excluded)."""
+    col, first = schedule_layout(rows)
+    if col is None:
+        return []
+    return list(range(first, len(rows) + 1))
+
+
+def schedule_urls(rows):
+    """{physical_row: url} for the data rows, in the located URL column."""
+    col, first = schedule_layout(rows)
+    if col is None:
+        return {}
+    out = {}
+    for line in range(first, len(rows) + 1):
+        r = rows[line - 1]
+        out[line] = r[col].strip() if len(r) > col else ""
+    return out
+
+
+def plan_rows(youtube_urls, twitch_urls, data_rows):
+    """[(physical_row, url), …] for SOURCE_PLAN, or None when a slot or a sheet
+    row is missing — a short sheet must abort, never silently write fewer."""
     pools = {"youtube": list(youtube_urls or ()), "twitch": list(twitch_urls or ())}
+    targets = list(data_rows or ())
+    if len(targets) < len(SOURCE_PLAN):
+        return None
     rows = []
-    for i, platform in enumerate(SOURCE_PLAN, start=1):
+    for i, platform in enumerate(SOURCE_PLAN):
         if not pools[platform]:
             return None
-        rows.append((i, pools[platform].pop(0)))
+        rows.append((targets[i], pools[platform].pop(0)))
     return rows
 
 
-def clear_rows(total=SHEET_ROWS_TO_CLEAR):
+def clear_rows(data_rows, total=SHEET_ROWS_TO_CLEAR):
     """Rows whose URL cell is emptied before the write. Wider than what gets
-    rewritten: a leftover row 4 would leave the relay a stint to advance into."""
-    return list(range(1, int(total) + 1))
+    written so a stale URL cannot linger below the run's own rows, but never
+    beyond the rows the sheet actually has."""
+    return list(data_rows or ())[:total]
 
 
 # ------------------------------------------------------------ confirmation
