@@ -411,6 +411,9 @@ PASS, WARN, FAIL, SKIP = "PASS", "WARN", "FAIL", "SKIP"
 SOFT_CHECKS = frozenset({
     "obs_standby", "obs_collection", "companion", "tailscale", "discord",
     "media", "overlay_fonts",
+    # A missing YouTube cookie jar is a setup fact, not a toolchain regression:
+    # Twitch still resolves, and discovery reports the shortfall on its own.
+    "cookies",
 })
 
 

@@ -396,6 +396,7 @@ def t_hard_and_soft_classification():
     assert st.severity_for("feed_a_bytes", False) == st.FAIL
     assert st.severity_for("hud_data", False) == st.FAIL
     assert st.severity_for("obs_standby", False) == st.WARN
+    assert st.severity_for("cookies", False) == st.WARN   # setup, not toolchain
     assert st.severity_for("companion", False) == st.WARN
     assert st.severity_for("feed_a_bytes", True) == st.PASS
 

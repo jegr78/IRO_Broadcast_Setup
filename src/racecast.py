@@ -6936,11 +6936,15 @@ def _smoke_twitch_probe(login):
 
 
 def _smoke_discover(cookies, queries, categories, say):
-    """(youtube_urls, twitch_urls) — at most MAX_ATTEMPTS_PER_PLATFORM probes per
-    platform. The cap is the brake: an uncapped walk down a poor result list is
-    exactly how the IP gets throttled."""
+    """(youtube_urls, twitch_urls, attempted_youtube) — at most
+    MAX_ATTEMPTS_PER_PLATFORM probes per platform. The cap is the brake: an
+    uncapped walk down a poor result list is exactly how the IP gets throttled.
+
+    The attempted URLs come back so the JS-runtime line can be read even when
+    every candidate was REJECTED: a failing YouTube resolve is precisely when
+    "which JS challenge provider did yt-dlp use" is the question."""
     sm = _sm()
-    yt_urls, seen = [], set()
+    yt_urls, seen, attempted = [], set(), []
     attempts = 0
     for query in queries:
         if len(yt_urls) >= 2 or attempts >= sm.MAX_ATTEMPTS_PER_PLATFORM:
@@ -6956,10 +6960,14 @@ def _smoke_discover(cookies, queries, categories, say):
             if not sm.topical_match(f"{cand['title']} {cand['channel']}"):
                 continue          # a pre-filter, so an attempt is never spent on a webcam
             attempts += 1
+            attempted.append(cand["url"])
             height, note = _smoke_yt_probe(cand["url"], cookies)
             ok, why = sm.accept_youtube(height, cand["title"], cand["channel"])
+            # The probe's own error beats the generic reason: "Requested format
+            # is not available" (the bot check hiding the formats) reads as "not
+            # live" otherwise, and that cost a full diagnosis cycle on the box.
             say(f"  youtube {cand['title'][:44]!r}: "
-                + (f"accepted ({height}p)" if ok else f"rejected — {why or note}"))
+                + (f"accepted ({height}p)" if ok else f"rejected — {note or why}"))
             if ok:
                 yt_urls.append(cand["url"])
     tw_urls, attempts = [], 0
@@ -6974,12 +6982,12 @@ def _smoke_discover(cookies, queries, categories, say):
         ok, why = sm.accept_twitch(plugin, qualities, category)
         say(f"  twitch {cand['login']!r}: "
             + (f"accepted ({sm.ladder_max_height(qualities)}p, {category})"
-               if ok else f"rejected — {why or note}"))
+               if ok else f"rejected — {note or why}"))
         if ok:
             url = f"https://www.twitch.tv/{cand['login']}"
             if sm.stream_host(url):
                 tw_urls.append(url)
-    return yt_urls, tw_urls
+    return yt_urls, tw_urls, attempted
 
 
 def _smoke_push(push_url, row, url):
@@ -7315,8 +7323,22 @@ def smoketest_cmd(rest):
                                      else "on PATH but fails to run"))
 
     say("\nDiscovery")
+    cookies = _cookies_path()
+    if not os.path.isfile(cookies):
+        # Without the jar YouTube's bot check hides every format and each probe
+        # fails as "not available" — a setup fact worth naming before the run
+        # spends its three attempts discovering it the hard way.
+        results.append(sm.Result("cookies", sm.severity_for("cookies", False),
+                                 "no YouTube cookie jar — resolves will hit the "
+                                 "bot check (racecast cookies firefox)"))
+        say("  note: no yt-cookies.txt — YouTube candidates will not resolve")
     queries, categories = _smoke_vocab(sheet_id)
-    yt_urls, tw_urls = _smoke_discover(_cookies_path(), queries, categories, say)
+    yt_urls, tw_urls, attempted_yt = _smoke_discover(cookies, queries, categories, say)
+    # Read this BEFORE the skip branch: when YouTube found nothing, the JS runtime
+    # is the first thing to look at, and reporting it only on success hides it in
+    # exactly the case that needs it.
+    tools["js_runtime"] = _smoke_js_runtime((yt_urls or attempted_yt or [""])[0])
+    say(f"  js_runtime  {tools['js_runtime']}")
     rows = sm.plan_rows(yt_urls, tw_urls)
     if rows is None:
         # Not a failure: "nobody suitable is streaming right now" is a fact about
@@ -7329,8 +7351,6 @@ def smoketest_cmd(rest):
                for r, u in rows]
     results.append(sm.Result("discovery", sm.PASS,
                              ", ".join(f"row {s['row']}: {s['platform']}" for s in sources)))
-    tools["js_runtime"] = _smoke_js_runtime(yt_urls[0])
-    say(f"  js_runtime  {tools['js_runtime']}")
 
     say("\nSheet")
     ok, note = _smoke_write_schedule(push_url, sheet_id, rows, say)
