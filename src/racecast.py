@@ -6769,6 +6769,15 @@ def _sm():
     return smoketest
 
 
+def _smoke_post_json(url, obj, headers=None, timeout=20):
+    """POST + parse. `http_util.post_json` returns the RAW body (only `get_json`
+    parses), so every POST site has to decode — the sibling of the existing
+    `_relay_post_json`. Callers that treated the bytes as a dict silently turned
+    every successful write into a reported failure."""
+    body = http_util.post_json(url, obj, headers=headers, timeout=timeout)
+    return json.loads(body.decode("utf-8"))
+
+
 def _smoke_capture(argv, timeout=90):
     """(returncode, combined output) for a probe subprocess. Never raises."""
     try:
@@ -6784,21 +6793,32 @@ def _smoke_capture(argv, timeout=90):
 
 
 def _smoke_fingerprint():
-    """Tool versions plus yt-dlp's own JS-runtime line. Not a check — the note a
-    red run gets compared against, so "what moved since the last green run" is a
-    diff instead of a guess."""
-    sm = _sm()
+    """Tool versions. Not a check — the note a red run gets compared against, so
+    "what moved since the last green run" is a diff instead of a guess. The
+    JS-runtime line is filled in later by `_smoke_js_runtime`."""
     out = {}
     for name, args in (("yt-dlp", ["--version"]), ("streamlink", ["--version"]),
                        ("ffmpeg", ["-version"]), ("deno", ["--version"])):
         rc, txt = _smoke_capture([name] + args, timeout=30)
         first = (txt.strip().splitlines() or [""])[0].strip()
         out[name] = first if rc == 0 else "MISSING"
-    rc, txt = _smoke_capture(
-        ["yt-dlp", "-v", "--simulate", "--no-warnings",
-         "--", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"], timeout=60)
-    out["js_runtime"] = sm.parse_js_runtimes(txt) or "unknown"
+    out["js_runtime"] = "unknown"
     return out
+
+
+def _smoke_js_runtime(url):
+    """yt-dlp's `JS runtimes:` line, read off a stream we ALREADY know is live.
+
+    Deno is the only JS challenge provider on the broadcast box, so if that line
+    changes or disappears the YouTube bot-check has no fallback — worth
+    recording. Reading it off a discovered URL rather than a hardcoded video id
+    keeps the run from depending on one stranger's clip staying up, and spends no
+    extra request when discovery found nothing."""
+    if not _sm().stream_host(url or ""):
+        return "unknown"
+    _rc, txt = _smoke_capture(
+        ["yt-dlp", "-v", "--simulate", "--no-warnings", "--", url], timeout=60)
+    return _sm().parse_js_runtimes(txt) or "unknown"
 
 
 def _smoke_vocab(sheet_id):
@@ -6822,8 +6842,10 @@ def _smoke_vocab(sheet_id):
         platform, value = row[0].strip().lower(), row[1].strip()
         if not value:
             continue
-        (yt if platform.startswith("you") else tw if platform.startswith("twi")
-         else []).append(value)
+        if platform.startswith("you"):
+            yt.append(value)
+        elif platform.startswith("twi"):
+            tw.append(value)
     return (yt or queries), (tw or categories)
 
 
@@ -6869,16 +6891,19 @@ def _smoke_twitch_candidates(category):
     dependency. yt-dlp has no Twitch directory extractor."""
     sm = _sm()
     try:
-        data = http_util.post_json(sm.TWITCH_GQL_URL, sm.twitch_category_query(category),
-                            headers={"Client-ID": sm.TWITCH_CLIENT_ID}, timeout=20)
+        data = _smoke_post_json(sm.TWITCH_GQL_URL, sm.twitch_category_query(category),
+                                headers={"Client-ID": sm.TWITCH_CLIENT_ID})
+        game = ((data or {}).get("data") or {}).get("game") or {}
+        edges = (game.get("streams") or {}).get("edges") or []
     except Exception:                            # noqa: BLE001 — discovery is best effort
         return []
-    game = ((data or {}).get("data") or {}).get("game") or {}
     out = []
-    for edge in (game.get("streams") or {}).get("edges") or []:
+    for edge in edges:
         node = edge.get("node") or {}
-        login = ((node.get("broadcaster") or {}).get("login") or "").strip()
-        if login:
+        login = ((node.get("broadcaster") or {}).get("login") or "").strip().lower()
+        # The login is interpolated into a URL that reaches streamlink and the
+        # league sheet, so it is validated against Twitch's own charset first.
+        if login and sm.twitch_login_ok(login):
             out.append({"login": login, "title": node.get("title") or "",
                         "viewers": node.get("viewersCount") or 0})
     return out
@@ -6916,6 +6941,8 @@ def _smoke_discover(cookies, queries, categories, say):
             if cand["url"] in seen:
                 continue
             seen.add(cand["url"])
+            if not sm.stream_host(cand["url"]):
+                continue          # host allow-list, same gate the relay applies
             if not sm.topical_match(f"{cand['title']} {cand['channel']}"):
                 continue          # a pre-filter, so an attempt is never spent on a webcam
             attempts += 1
@@ -6939,7 +6966,9 @@ def _smoke_discover(cookies, queries, categories, say):
             + (f"accepted ({sm.ladder_max_height(qualities)}p, {category})"
                if ok else f"rejected — {why or note}"))
         if ok:
-            tw_urls.append(f"https://www.twitch.tv/{cand['login']}")
+            url = f"https://www.twitch.tv/{cand['login']}"
+            if sm.stream_host(url):
+                tw_urls.append(url)
     return yt_urls, tw_urls
 
 
@@ -6949,13 +6978,18 @@ def _smoke_push(push_url, row, url):
     slot survives"). Those fields are vocabulary-constrained against the
     Configuration tab, so a discovered channel name is not a legal value there."""
     try:
-        body = http_util.post_json(push_url, {"action": "schedule", "row": int(row),
-                                       "url": url}, timeout=30)
+        body = _smoke_post_json(push_url, {"action": "schedule", "row": int(row),
+                                           "url": url}, timeout=30)
+    except ValueError:
+        # A Google error page instead of JSON: its body can carry script ids and
+        # would land in stdout, --json and the history file. Report the shape.
+        return False, "webhook did not answer with JSON"
     except Exception as exc:                     # noqa: BLE001 — reported, not raised
         return False, str(exc)[:160]
     if isinstance(body, dict) and body.get("ok"):
         return True, ""
-    return False, str(body)[:160]
+    note = (body or {}).get("error") if isinstance(body, dict) else None
+    return False, str(note or "webhook rejected the write")[:160]
 
 
 def _smoke_schedule_urls(sheet_id):
@@ -6995,17 +7029,37 @@ def _smoke_write_schedule(push_url, sheet_id, rows, say):
                    f"{SMOKE_READBACK_S}s — refusing to test the previous rows")
 
 
+def _smoke_error_payload(exc):
+    """The relay's own JSON error body out of an HTTPError, else the status.
+
+    It answers a dead OBS with 503 + `{"error": "obs unavailable"}`, but urllib
+    raises on 5xx, so without reading the body back the run only ever sees
+    "HTTP Error 503" — and `step_error_verdict` could not tell an unreachable OBS
+    (a machine fact) from a real failure."""
+    try:
+        payload = json.loads(exc.read().decode("utf-8"))
+    except Exception:                            # noqa: BLE001 — not JSON, use the code
+        payload = None
+    if isinstance(payload, dict) and payload.get("error"):
+        return {"error": str(payload["error"])[:160]}
+    return {"error": f"HTTP {exc.code}"}
+
+
 def _smoke_relay_get(path, timeout=15):
     try:
         return http_util.get_json(f"http://127.0.0.1:{RELAY_PORT}/{path}", timeout=timeout)
+    except http_util.HTTPError as exc:
+        return _smoke_error_payload(exc)
     except Exception as exc:                     # noqa: BLE001 — reported as a check
         return {"error": str(exc)[:160]}
 
 
 def _smoke_relay_post(path, body, timeout=20):
     try:
-        return http_util.post_json(f"http://127.0.0.1:{RELAY_PORT}/{path}", body,
-                            timeout=timeout)
+        return _smoke_post_json(f"http://127.0.0.1:{RELAY_PORT}/{path}", body,
+                                timeout=timeout)
+    except http_util.HTTPError as exc:
+        return _smoke_error_payload(exc)
     except Exception as exc:                     # noqa: BLE001 — reported as a check
         return {"error": str(exc)[:160]}
 
@@ -7080,8 +7134,9 @@ def _smoke_rundown(say):
             on_air = "Feed B"
         res = {} if step.kind == "arm" and not manual_arm else _smoke_apply(step)
         if isinstance(res, dict) and res.get("error"):
-            results.append(sm.Result(name, sm.FAIL, str(res["error"])[:120]))
-            say(f"  {step.label}: FAILED — {res['error']}")
+            status, note = sm.step_error_verdict(res["error"])
+            results.append(sm.Result(name, status, note))
+            say(f"  {step.label}: {status} — {note}")
             continue
         if step.wait_for_bytes:
             which = "B" if "B" in step.label else "A"
@@ -7258,11 +7313,12 @@ def smoketest_cmd(rest):
                                  f"found {len(yt_urls)} YouTube + {len(tw_urls)} "
                                  f"Twitch, need 2 + 1"))
         return _smoke_finish(results, tools, [], minutes, as_json, lines)
-    sources = [{"row": r, "url": u,
-                "platform": "twitch" if "twitch.tv" in u else "youtube"}
+    sources = [{"row": r, "url": u, "platform": sm.platform_of(u)}
                for r, u in rows]
     results.append(sm.Result("discovery", sm.PASS,
                              ", ".join(f"row {s['row']}: {s['platform']}" for s in sources)))
+    tools["js_runtime"] = _smoke_js_runtime(yt_urls[0])
+    say(f"  js_runtime  {tools['js_runtime']}")
 
     say("\nSheet")
     ok, note = _smoke_write_schedule(push_url, sheet_id, rows, say)
@@ -7287,9 +7343,10 @@ def smoketest_cmd(rest):
             say("\nEvent — stopping")
             try:
                 event_stop([])
-            except SystemExit:
-                raise
-            except Exception as exc:             # noqa: BLE001 — teardown is best effort
+            except BaseException as exc:         # noqa: BLE001 — incl. SystemExit
+                # The run is substantively finished here; letting a teardown exit
+                # propagate would drop the verdict, the history line AND the exit
+                # code, which is the one thing the operator came for.
                 say(f"  teardown note: {exc}")
     return _smoke_finish(results, tools, sources, minutes, as_json, lines)
 

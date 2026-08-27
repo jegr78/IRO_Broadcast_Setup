@@ -2,6 +2,7 @@
 """Stdlib unit checks for the post-update smoke test. Run: python3 tests/test_smoketest.py"""
 import importlib.util
 import json
+import re
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -206,6 +207,53 @@ def t_arm_verdict_rests_on_bytes_not_on_the_arm_call():
     assert st.arm_verdict(False, False)[0] == st.FAIL   # no bytes is a real failure
 
 
+def t_stream_host_is_the_ssrf_gate():
+    """Discovered URLs reach a local yt-dlp WITH the cookie jar and the league
+    sheet, so they get the relay's host allow-list before either."""
+    assert st.stream_host("https://www.youtube.com/watch?v=x") == "youtube.com"
+    assert st.stream_host("https://youtu.be/x") == "youtu.be"
+    assert st.stream_host("https://www.twitch.tv/someone") == "twitch.tv"
+    # A substring test would pass these; parsing the hostname does not.
+    assert st.stream_host("https://evil.example/twitch.tv") == ""
+    assert st.stream_host("https://youtube.com@evil.example/x") == ""
+    assert st.stream_host("http://169.254.169.254/latest/meta-data") == ""
+    assert st.stream_host("file:///etc/passwd") == ""
+    assert st.stream_host("") == ""
+
+
+def t_platform_of_reads_the_hostname():
+    assert st.platform_of("https://www.twitch.tv/a") == "twitch"
+    assert st.platform_of("https://www.youtube.com/watch?v=a") == "youtube"
+    assert st.platform_of("https://evil.example/twitch.tv") == ""
+
+
+def t_twitch_login_is_no_looser_than_the_canonical_validator():
+    """The GQL login lands in a URL and in the sheet, so it is charset-checked.
+
+    `broadcast_chat.twitch_login` EXTRACTS a login from a URL or @handle; this one
+    VALIDATES an already-bare login from the API reply. So the invariant is not
+    equality but strictness: whatever this accepts, the canonical one accepts
+    unchanged. (Equality would fail on "../etc", which the canonical extractor
+    happily reduces to "etc".)
+    """
+    bc = _load("broadcast_chat", ("src", "scripts", "broadcast_chat.py"))
+    for value in ("someone", "Some_One", "a" * 25):
+        assert st.twitch_login_ok(value)
+        assert bc.twitch_login(value) == value.strip().lower(), value
+    for value in ("a" * 26, "", "   ", "with space", "semi;colon",
+                  "nl\r\njoin #other", "../etc", "a/b"):
+        assert not st.twitch_login_ok(value), value
+
+
+def t_step_error_verdict_treats_a_dead_obs_like_the_read_backs():
+    """SPLIT is the only step whose own call surfaces an OBS error; failing hard
+    there while every read-back only warns would contradict the classification."""
+    assert st.step_error_verdict("obs unavailable")[0] == st.WARN
+    assert st.step_error_verdict("OBS unreachable: connection refused")[0] == st.WARN
+    assert st.step_error_verdict("manual feed arm disabled")[0] == st.FAIL
+    assert st.step_error_verdict("boom")[0] == st.FAIL
+
+
 def t_program_audio_skips_when_the_endpoint_is_absent():
     """Fan-out off is a machine setting; blaming ffmpeg for it would be a false red."""
     assert st.program_audio_verdict(64000)[0] == st.PASS
@@ -252,20 +300,64 @@ def t_rundown_targets_exist_in_the_shipped_collection():
         assert name in inputs, f"audio input {name!r} is not in the shipped collection"
 
 
-def t_rundown_relay_paths_exist_in_the_relay():
-    """Drift guard: a renamed relay route must fail here, not mid-rundown."""
+def _relay_source():
     with open(os.path.join(ROOT, "src", "relay", "racecast-feeds.py"),
               encoding="utf-8") as fh:
-        src = fh.read()
+        return fh.read()
+
+
+def _route_segments(path):
+    """Path segments the relay matches on, minus the feed letter (feed/B/activate
+    -> feed, activate). The relay routes on a split path list, so every one of
+    these appears as a quoted literal in its source."""
+    return [seg for seg in path.split("/") if seg not in ("A", "B", "POV")]
+
+
+def _assert_route_exists(src, path, where):
+    for seg in _route_segments(path):
+        assert f'"{seg}"' in src, f"relay route segment {seg!r} missing for {where}"
+
+
+def t_rundown_relay_paths_exist_in_the_relay():
+    """Drift guard: a renamed relay route must fail here, not mid-rundown.
+
+    Checks EVERY segment as a quoted literal. The first version only tested the
+    leading segment ("/feed" in src), which even the invented route
+    feed/B/voellig-erfunden passed — it guarded nothing.
+    """
+    src = _relay_source()
     for step in st.RUNDOWN:
-        if not step.relay:
-            continue
-        # feed/B/activate -> the handler name; timer/stop -> the documented route.
-        head = step.relay.split("/")[0]
-        assert "/" + head in src, f"relay route /{head} not found for {step.label}"
+        if step.relay:
+            _assert_route_exists(src, step.relay, step.label)
     assert any(s.relay == "feed/B/activate" for s in st.RUNDOWN)
     assert any(s.relay == "timer/stop" for s in st.RUNDOWN)   # panel PAUSE == timer/stop
     assert not any(s.relay == "timer/pause" for s in st.RUNDOWN)
+
+
+def t_the_route_guard_actually_bites():
+    """Guard the guard: an invented route must be rejected."""
+    src = _relay_source()
+    for bogus in ("feed/B/voellig-erfunden", "timer/gibtsnicht", "obs/nichtda"):
+        try:
+            _assert_route_exists(src, bogus, "bogus")
+        except AssertionError:
+            continue
+        raise AssertionError(f"the route guard accepted {bogus!r}")
+
+
+def t_orchestrator_relay_paths_exist_in_the_relay():
+    """The rundown is not the only caller: _smoke_apply/_observe hardcode
+    obs/scene, obs/source, obs/audio, obs/split-audio, obs/state and more. They
+    are exactly as rename-prone, so they are read straight out of the call sites
+    rather than mirrored into a list that could drift."""
+    with open(os.path.join(ROOT, "src", "racecast.py"), encoding="utf-8") as fh:
+        orchestrator = fh.read()
+    paths = set(re.findall(r'_smoke_relay_(?:get|post)\(\s*f?"([a-z0-9/_-]+)"', orchestrator))
+    assert {"obs/scene", "obs/source", "obs/audio", "obs/split-audio", "obs/state",
+            "status"} <= paths, f"call sites changed shape: {sorted(paths)}"
+    src = _relay_source()
+    for path in sorted(paths):
+        _assert_route_exists(src, path, "orchestrator")
 
 
 def t_state_mismatches():

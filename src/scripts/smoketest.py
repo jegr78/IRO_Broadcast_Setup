@@ -14,6 +14,7 @@ docs/superpowers/specs/2026-08-27-post-update-smoketest-design.md
 """
 import json
 import re
+from urllib.parse import urlparse
 import urllib.parse
 
 # --------------------------------------------------------------- vocabulary
@@ -421,6 +422,74 @@ class Result:
 
     def __repr__(self):                                   # pragma: no cover
         return f"<Result {self.name} {self.severity}>"
+
+
+_TWITCH_LOGIN_RE = re.compile(r"^[a-z0-9_]{1,25}$")
+
+# Deliberately duplicated from the relay's `_is_stream_url` rather than imported:
+# this module is pure stdlib and is loaded standalone (by the CLI and by the
+# tests), while the relay is a dash-named script that cannot be imported at all.
+# tests/test_smoketest.py pins both copies against the same vectors.
+_STREAM_HOSTS = ("youtu.be", "youtube.com", "twitch.tv")
+
+
+def stream_host(url):
+    """The supported streaming host of `url`, or "" — the SSRF gate for discovery.
+
+    Mirrors the relay's `_is_stream_url` host allow-list. Discovery hands its
+    results to a local yt-dlp WITH the cookie jar attached and writes them into
+    the league sheet through the webhook, which bypasses `schedule_set`'s own
+    `is_channel` check — so the allow-list has to be applied here too. Parsing
+    the hostname (rather than testing a substring) is what makes
+    `https://evil.example/twitch.tv` fail.
+    """
+    try:
+        p = urlparse(url or "")
+    except ValueError:
+        return ""
+    if p.scheme not in ("http", "https"):
+        return ""
+    host = (p.hostname or "").lower()
+    for known in _STREAM_HOSTS:
+        if host == known or host.endswith("." + known):
+            return known
+    return ""
+
+
+def platform_of(url):
+    """"twitch" | "youtube" | "" — by parsed hostname, never by substring."""
+    host = stream_host(url)
+    if host == "twitch.tv":
+        return "twitch"
+    return "youtube" if host else ""
+
+
+def twitch_login_ok(login):
+    """Twitch's own `[a-z0-9_]{1,25}` charset — mirrors `broadcast_chat.twitch_login`.
+
+    The login arrives verbatim from the public GQL reply and is interpolated into
+    a URL that goes to streamlink and into the league sheet, so it is validated
+    before either.
+    """
+    return bool(_TWITCH_LOGIN_RE.match((login or "").strip().lower()))
+
+
+OBS_UNREACHABLE_MARKERS = ("obs unavailable", "obs unreachable", "obs is not")
+
+
+def step_error_verdict(error):
+    """(status, note) when a rundown step's own call reports an error.
+
+    An unreachable OBS is an environment fact, not a toolchain regression — and
+    it already only WARNs on every read-back, so failing hard when the SPLIT
+    audio call hits the same dead OBS would be the classification contradicting
+    itself. Anything else is a real failure.
+    """
+    text = str(error)
+    low = text.lower()
+    if any(m in low for m in OBS_UNREACHABLE_MARKERS):
+        return WARN, text[:120]
+    return FAIL, text[:120]
 
 
 def arm_verdict(manual_arm, bytes_ok):

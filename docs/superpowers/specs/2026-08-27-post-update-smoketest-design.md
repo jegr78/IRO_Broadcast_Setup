@@ -33,7 +33,9 @@ toolchain is the broadcast box, and that box holds only the two binaries, `.env`
    plus yt-dlp's own JS-runtime line (`[debug] JS runtimes: deno-x.y.z`). Not a test — a
    note, so a red run can be diffed against the last green one. Note that deno is the only
    available JS challenge provider on the box (`bun/node/quickjs unavailable`), so there is
-   no fallback if it breaks.
+   no fallback if it breaks. The JS-runtime line is read off a stream discovery has
+   ALREADY proven live, not off a hardcoded video id: the run then does not depend on one
+   stranger's clip staying up, and spends no request at all when discovery finds nothing.
 3. **Discovery — three live sources, ordered YouTube, Twitch, YouTube.**
    - YouTube: yt-dlp against the live-filtered search URL
      (`.../results?search_query=<term>&sp=EgJAAQ%3D%3D`).
@@ -169,9 +171,17 @@ is a `tail -2` rather than a feeling.
 - `src/racecast.py` — the verb, the network calls and the orchestration.
 - Outbound HTTP goes through `src/scripts/http_util.py` (house rule, enforced by
   `tests/test_http_util.py`).
-- `tests/test_smoketest.py` — the pure logic, plus a drift guard asserting that every scene
-  and source named in the rundown table exists in the shipped OBS collection JSON. That
-  catches a rename in CI without duplicating the panel's `CONFIG`.
+- `tests/test_smoketest.py` — the pure logic, plus drift guards asserting that every scene
+  and source named in the rundown exists in the shipped OBS collection JSON, and that every
+  relay route reached by the run — the rundown's own AND the ones hardcoded in the
+  orchestrator, which are read straight out of the call sites — exists in the relay. Each
+  route is matched segment by segment as a quoted literal; a guard that only checked the
+  leading segment passed even for an invented route, so `t_the_route_guard_actually_bites`
+  now guards the guard. That catches a rename in CI without duplicating the panel's `CONFIG`.
+- `tests/test_racecast.py` — the orchestration glue with `http_util` stubbed. The pure
+  module cannot see this layer, and that is precisely where `http_util.post_json` returning
+  the RAW body (unlike `get_json`, which parses) turned every successful webhook write into
+  a reported failure.
 - A wiki page under `src/docs/wiki/` covering when to run it and how to read the result.
 
 ## Deliberately out of scope

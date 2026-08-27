@@ -40,9 +40,10 @@ your installed toolchain still works.
    phrase names the profile because the accident worth guarding against is the
    right command run against the wrong league — the command **clears the URL
    column** of the Schedule tab.
-3. Records a **toolchain fingerprint**: the four version strings plus yt-dlp's
-   own JS-runtime line. Not a check, a note — when a later run goes red, this is
-   what you diff against the last green one.
+3. Records a **toolchain fingerprint**: the four version strings, plus yt-dlp's
+   own JS-runtime line read off one of the streams discovery just proved live.
+   Not a check, a note — when a later run goes red, this is what you diff
+   against the last green one.
 4. **Discovers three live sources**: two on YouTube (live-filtered search) and
    one on Twitch (category listing). Each candidate must resolve at 720p or
    better and be a sim-racing stream before it is used, and at most three

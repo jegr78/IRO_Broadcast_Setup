@@ -4349,6 +4349,108 @@ def t_gt7_discover_cmd_single_save(capsys=None):
     assert writes["ip"] == "192.168.1.42"
 
 
+# --------------------------------------------------------- smoke-test glue
+# http_util.post_json returns the RAW BODY (unlike get_json, which parses), so
+# every POST site has to decode it. The pure smoketest module cannot catch that
+# — these exercise the glue in racecast.py itself, with the network stubbed.
+
+class _StubHttp:
+    """Records calls and replays canned bodies, in http_util's own return shapes."""
+
+    # The real module re-exports this so callers never import urllib to catch it.
+    import urllib.error as _ue
+    HTTPError = _ue.HTTPError
+    del _ue
+
+    def __init__(self, post=b"{}", get=b"{}"):
+        self._post, self._get = post, get
+        self.posts = []
+
+    def post_json(self, url, obj, *, headers=None, timeout=None):
+        self.posts.append((url, obj))
+        return self._post
+
+    def get_bytes(self, url, *, headers=None, timeout=None):
+        return self._get
+
+    def get_json(self, url, *, headers=None, timeout=None):
+        import json as _json
+        return _json.loads(self._get.decode("utf-8"))
+
+
+def _with_stub_http(stub, fn):
+    saved = m.http_util
+    m.http_util = stub
+    try:
+        return fn()
+    finally:
+        m.http_util = saved
+
+
+def t_smoke_push_reads_the_webhook_ok_flag():
+    stub = _StubHttp(post=b'{"ok": true}')
+    ok, note = _with_stub_http(stub, lambda: m._smoke_push("https://example.invalid/w", 1, "u"))
+    assert ok and note == "", note
+    # Column A only: Streamer and Stint must never be sent.
+    assert stub.posts[0][1] == {"action": "schedule", "row": 1, "url": "u"}
+
+
+def t_smoke_push_reports_a_rejected_write():
+    stub = _StubHttp(post=b'{"ok": false, "error": "nope"}')
+    ok, _note = _with_stub_http(stub, lambda: m._smoke_push("https://example.invalid/w", 1, "u"))
+    assert not ok
+
+
+def t_smoke_relay_post_returns_a_parsed_reply():
+    stub = _StubHttp(post=b'{"scene": "Standby", "muted": {}}')
+    got = _with_stub_http(stub, lambda: m._smoke_relay_post("obs/state", {}))
+    assert got["scene"] == "Standby"      # a bytes reply would have no .get
+
+
+def t_smoke_twitch_candidates_parses_the_gql_reply():
+    body = (b'{"data": {"game": {"streams": {"edges": [{"node": '
+            b'{"title": "t", "viewersCount": 9, "broadcaster": {"login": "someone"}}}]}}}}')
+    stub = _StubHttp(post=body)
+    got = _with_stub_http(stub, lambda: m._smoke_twitch_candidates("iRacing"))
+    assert [c["login"] for c in got] == ["someone"]
+
+
+def t_smoke_twitch_candidates_survives_a_junk_reply():
+    """Discovery is best effort: a malformed body must not abort the run."""
+    stub = _StubHttp(post=b"<html>503</html>")
+    got = _with_stub_http(stub, lambda: m._smoke_twitch_candidates("iRacing"))
+    assert got == []
+
+
+def _http_error(code, body):
+    import io, urllib.error
+    return urllib.error.HTTPError("http://127.0.0.1/x", code, "err", {},
+                                  io.BytesIO(body))
+
+
+def t_smoke_relay_post_keeps_the_error_body_of_a_503():
+    """The relay answers a dead OBS with 503 + {"error": "obs unavailable"}.
+    urllib raises on 5xx, so without reading the body back the run only ever sees
+    "HTTP Error 503" — and the SPLIT step fails hard instead of warning."""
+    class _Raiser(_StubHttp):
+        def post_json(self, url, obj, *, headers=None, timeout=None):
+            raise _http_error(503, b'{"error": "obs unavailable"}')
+
+    got = _with_stub_http(_Raiser(), lambda: m._smoke_relay_post("obs/split-audio", {}))
+    assert got["error"] == "obs unavailable", got
+    assert m._sm().step_error_verdict(got["error"])[0] == m._sm().WARN
+
+
+def t_smoke_relay_post_falls_back_to_the_status_code():
+    """A non-JSON error page must still produce a readable note, not a traceback."""
+    class _Raiser(_StubHttp):
+        def post_json(self, url, obj, *, headers=None, timeout=None):
+            raise _http_error(500, b"<html>boom</html>")
+
+    got = _with_stub_http(_Raiser(), lambda: m._smoke_relay_post("obs/state", {}))
+    assert "500" in got["error"], got
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
