@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Stdlib checks for the racecast dispatcher routing. Run: python3 tests/test_racecast.py"""
-import importlib.util, os, tempfile, time
+import importlib.util, io, os, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -4351,40 +4351,60 @@ def t_gt7_discover_cmd_single_save(capsys=None):
 
 # ------------------------------------------------- GUI launch environment
 
+
+class _FakeApp:
+    """Minimal `event` stand-in: one GUI app, optional session overrides."""
+
+    def __init__(self, overrides=None):
+        self._overrides = {} if overrides is None else overrides
+
+    def launch_command(self, app, platform, **kw):
+        return (["/usr/bin/obs"], None)
+
+    def launch_env(self, app, platform):
+        return dict(self._overrides)
+
+
+class _FakeProc:
+    """Popen stand-in. rc=None = still running; a number = already exited."""
+
+    def __init__(self, rc=None):
+        self._rc = rc
+
+    def poll(self):
+        return self._rc
+
+
+def _launch(ev, popen, app="obs"):
+    """Drive _event_launch through its seams — no stdlib module is mutated. The
+    house style injects the same way (preflight.tool_version(run=…))."""
+    import install_apps
+    saved = install_apps.app_present
+    try:
+        install_apps.app_present = lambda a, platform: True
+        return m._event_launch(ev, app, popen=popen, sleep=lambda _s: None)
+    finally:
+        install_apps.app_present = saved
+
+
 def t_event_launch_strips_the_pyinstaller_library_path():
     """OBS and Discord link the SYSTEM libraries. Handing them the frozen
     binary's LD_LIBRARY_PATH makes them load our bundled libssl and die with
     "version `OPENSSL_3.2.0' not found" before they can even write a log — and
-    stderr=DEVNULL hides it, so `event start` only ever says "still not up".
-    services.external_tool_env() is the house fix; this was the one spawn site
-    that skipped it (#572)."""
+    stderr=DEVNULL hid it, so `event start` only ever said "still not up" (#572).
+    """
     seen = {}
-    saved_popen, saved_env = m.subprocess.Popen, m.sv.external_tool_env
-    clean = {"PATH": "/usr/bin", "DISPLAY": ":0"}    # no LD_LIBRARY_PATH
-
-    class _Ev:
-        @staticmethod
-        def launch_command(app, platform, **kw):
-            return (["/usr/bin/obs"], None)
-
-        @staticmethod
-        def launch_env(app, platform):
-            return {"XDG_RUNTIME_DIR": "/run/user/1000"}
-
-    saved_present = None
-    import install_apps
-    saved_present = install_apps.app_present
-    install_apps.app_present = lambda app, platform: True
-    m.sv.external_tool_env = lambda *a, **k: dict(clean)
-    m.subprocess.Popen = lambda argv, **kw: seen.update(kw) or None
+    saved_env = m.sv.external_tool_env
+    m.sv.external_tool_env = lambda *a, **k: {"PATH": "/usr/bin", "DISPLAY": ":0"}
     try:
-        assert m._event_launch(_Ev, "obs") is True
+        ok = _launch(_FakeApp({"XDG_RUNTIME_DIR": "/run/user/1000"}),
+                     lambda argv, **kw: seen.update(kw) or _FakeProc())
     finally:
-        m.subprocess.Popen, m.sv.external_tool_env = saved_popen, saved_env
-        install_apps.app_present = saved_present
+        m.sv.external_tool_env = saved_env
+    assert ok is True
     env = seen.get("env") or {}
-    # NB: never assert with `env` as the message — it dumps the whole process
-    # environment (tokens included) into the test output on failure.
+    # NB: never assert with `env` as the message — it would dump the whole
+    # process environment (tokens included) into the test output on failure.
     assert "LD_LIBRARY_PATH" not in env, "LD_LIBRARY_PATH reached the GUI app"
     # The session overrides still have to reach the app (PR #560).
     assert env.get("XDG_RUNTIME_DIR") == "/run/user/1000", "session override lost"
@@ -4395,28 +4415,52 @@ def t_event_launch_strips_it_even_without_session_overrides():
     """macOS/Windows have no session overrides, but a frozen parent still puts
     its bundle on DYLD_/LD_LIBRARY_PATH. Passing env=None there would inherit it."""
     seen = {}
-    saved_popen, saved_env = m.subprocess.Popen, m.sv.external_tool_env
-    import install_apps
-    saved_present = install_apps.app_present
-
-    class _Ev:
-        @staticmethod
-        def launch_command(app, platform, **kw):
-            return (["/Applications/OBS.app"], None)
-
-        @staticmethod
-        def launch_env(app, platform):
-            return {}
-
-    install_apps.app_present = lambda app, platform: True
+    saved_env = m.sv.external_tool_env
     m.sv.external_tool_env = lambda *a, **k: {"PATH": "/usr/bin"}
-    m.subprocess.Popen = lambda argv, **kw: seen.update(kw) or None
     try:
-        assert m._event_launch(_Ev, "obs") is True
+        ok = _launch(_FakeApp(), lambda argv, **kw: seen.update(kw) or _FakeProc())
     finally:
-        m.subprocess.Popen, m.sv.external_tool_env = saved_popen, saved_env
-        install_apps.app_present = saved_present
+        m.sv.external_tool_env = saved_env
+    assert ok is True
     assert seen.get("env") == {"PATH": "/usr/bin"}, "frozen env not passed through"
+
+
+def t_event_launch_reports_an_app_that_dies_immediately():
+    """The reason #572 stayed invisible: OBS said exactly what was wrong and the
+    message went to DEVNULL. An app already gone after the grace window now has
+    its own words printed."""
+    saved_env = m.sv.external_tool_env
+    m.sv.external_tool_env = lambda *a, **k: {"PATH": "/usr/bin"}
+
+    def _dies(argv, **kw):
+        kw["stderr"].write(b"obs: libssl.so.3: version `OPENSSL_3.2.0' not found\n")
+        return _FakeProc(rc=127)
+
+    out = io.StringIO()
+    saved_stdout = sys.stdout
+    sys.stdout = out
+    try:
+        _launch(_FakeApp(), _dies)
+    finally:
+        sys.stdout = saved_stdout
+        m.sv.external_tool_env = saved_env
+    printed = out.getvalue()
+    assert "exited immediately" in printed, printed
+    assert "OPENSSL_3.2.0" in printed, printed
+
+
+def t_gui_spawn_keeps_quiet_about_a_healthy_app():
+    """A live GUI app's stderr is not ours to keep — no note, nothing printed."""
+    out = io.StringIO()
+    saved_stdout = sys.stdout
+    sys.stdout = out
+    try:
+        note = m._gui_spawn(["/usr/bin/obs"], None, None, "obs",
+                            popen=lambda argv, **kw: _FakeProc(), sleep=lambda _s: None)
+    finally:
+        sys.stdout = saved_stdout
+    assert note == ""
+    assert out.getvalue() == "", out.getvalue()
 
 
 if __name__ == "__main__":

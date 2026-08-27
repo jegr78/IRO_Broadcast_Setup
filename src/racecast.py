@@ -2555,9 +2555,13 @@ def app_launch_cmd(rest):
                      f"{_tailscale_login_hint()}).")
         sys.exit(f"app: cannot launch {name} on this system — is it installed?")
     argv, cwd = cmd
+    # Same environment handling as `event start`: this is the documented manual
+    # fallback for launching OBS, so it must not fail in the ways event start no
+    # longer does (#572) — the frozen library path, and no session overrides
+    # when run over SSH.
+    child_env, _overrides = _gui_child_env(name, ev)
     try:
-        subprocess.Popen(argv, cwd=cwd, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, **sv.spawn_kwargs(os.name))
+        _gui_spawn(argv, cwd, child_env, name)
     except OSError as exc:
         sys.exit(f"app: failed to launch {name} ({exc}).")
     print(f"Launched {name}.")
@@ -3103,8 +3107,10 @@ def companion_start(rest):
         # plainly now, bind on the next run (the bind edit needs the file).
         print(f"companion: first launch (no config at {cfg_path} yet) — starting Companion as-is.")
         print("  When it is up, run `racecast companion restart` to bind it to the Tailscale IP.")
-        subprocess.Popen(cmds["start"], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, **sv.spawn_kwargs(os.name))
+        # Same frozen-environment handling as the other GUI launches (#572):
+        # Companion links the system libraries too.
+        _gui_spawn(cmds["start"], None, _gui_child_env("companion")[0],
+                   "companion")
         return
     with open(cfg_path, encoding="utf-8") as fh:
         text = fh.read()
@@ -3133,8 +3139,10 @@ def companion_start(rest):
         print(f"Set Companion bind_ip {current} -> {desired} (backup: {cfg_path}.racecast-bak)")
     if plan["start"]:
         print("Starting Companion…")
-        subprocess.Popen(cmds["start"], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, **sv.spawn_kwargs(os.name))
+        # Same frozen-environment handling as the other GUI launches (#572):
+        # Companion links the system libraries too.
+        _gui_spawn(cmds["start"], None, _gui_child_env("companion")[0],
+                   "companion")
     else:
         print(f"Companion already bound to {desired} and running.")
     host = desired if desired != "0.0.0.0" else (ts or "<this-machine-ip>")
@@ -3542,7 +3550,57 @@ def _event_gate_results(ev, pf):
     return results
 
 
-def _event_launch(ev, app):
+GUI_LAUNCH_GRACE_S = 1.5      # long enough to catch a dynamic-linker death
+
+
+def _gui_child_env(app, ev=None):
+    """Environment for spawning a GUI app: the de-PyInstaller base, plus the
+    headless session overrides on top.
+
+    A GUI app links the SYSTEM libraries, so it must not inherit the frozen
+    binary's LD_LIBRARY_PATH — it points at our extracted _MEI bundle and the app
+    loads our libssl instead, dying with "version `OPENSSL_x.y.z' not found"
+    (#572). `external_tool_env()` returns None off the frozen binary, so a source
+    run is unchanged. Returns (env, overrides).
+    """
+    ev = _event_modules()[0] if ev is None else ev
+    overrides = ev.launch_env(app, sys.platform)
+    env = sv.external_tool_env()
+    if overrides:
+        env = dict(os.environ if env is None else env)
+        env.update(overrides)
+    return env, overrides
+
+
+def _gui_spawn(argv, cwd, env, app, popen=None, sleep=None):
+    """Launch a GUI app and surface an IMMEDIATE death in its own words.
+
+    stderr used to go straight to DEVNULL, so an app that died in the dynamic
+    linker left no trace on any surface and the bring-up could only report
+    "still not up" — which is why #572 stayed invisible. Capture into a temp
+    file and, if the process is already gone a moment later, print what it said.
+    A survivor's buffer is dropped: a live GUI app's stderr is not ours to keep.
+    Raises OSError like Popen; returns the note it printed ("" when the app is
+    still alive).
+    """
+    popen = subprocess.Popen if popen is None else popen
+    sleep = time.sleep if sleep is None else sleep
+    with tempfile.TemporaryFile() as fh:
+        proc = popen(argv, cwd=cwd, env=env, stdout=subprocess.DEVNULL,
+                     stderr=fh, **sv.spawn_kwargs(os.name))
+        sleep(GUI_LAUNCH_GRACE_S)
+        if proc is None or proc.poll() is None:
+            return ""                    # still running — nothing to report
+        fh.seek(0)
+        text = fh.read().decode("utf-8", "replace")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()][:3]
+    note = " / ".join(lines)[:400]
+    print(f"{app}: exited immediately"
+          + (f" — {note}" if note else " (no output)."))
+    return note
+
+
+def _event_launch(ev, app, popen=None, sleep=None):
     """Best-effort GUI-app launch: report and continue on every failure path.
     Returns True iff a launch was actually attempted."""
     import install_apps
@@ -3556,24 +3614,13 @@ def _event_launch(ev, app):
         print(f"{app}: cannot launch automatically — {hint}.")
         return False
     argv, cwd = cmd
-    overrides = ev.launch_env(app, sys.platform)
-    # OBS and Discord link the SYSTEM libraries, so they must NOT inherit the
-    # frozen binary's LD_LIBRARY_PATH: it points at our extracted _MEI bundle and
-    # they load our libssl instead, dying with "version `OPENSSL_x.y.z' not
-    # found" before they can write a log — while stderr=DEVNULL hides the reason
-    # and `event start` only ever reports "still not up" (#572). Same call every
-    # other external spawn makes; None off the frozen binary, so a source run is
-    # unchanged.
-    child_env = sv.external_tool_env()
+    child_env, overrides = _gui_child_env(app, ev)
     if overrides:
-        child_env = dict(os.environ if child_env is None else child_env)
-        child_env.update(overrides)
         print("{}: targeting the autologin session ({}).".format(
             app, ", ".join("{}={}".format(k, v) for k, v in sorted(overrides.items()))))
     print(f"{app}: launching…")
     try:
-        subprocess.Popen(argv, cwd=cwd, env=child_env, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, **sv.spawn_kwargs(os.name))
+        _gui_spawn(argv, cwd, child_env, app, popen=popen, sleep=sleep)
     except OSError as exc:
         print(f"{app}: launch failed ({exc}).")
         return False
