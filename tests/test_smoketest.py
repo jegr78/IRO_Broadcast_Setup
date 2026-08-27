@@ -20,13 +20,37 @@ st = _load("smoketest", ("src", "scripts", "smoketest.py"))
 
 # ---------------------------------------------------------------- parsing
 
-def t_parse_rcq():
-    assert st.parse_rcq("rcq 1080 60") == (1080, 60)
-    assert st.parse_rcq("some noise\nrcq 720 30\nmore") == (720, 30)
-    # yt-dlp prints "NA" for a missing field on some formats.
-    assert st.parse_rcq("rcq NA NA") is None
+def t_parse_rcq_reads_what_yt_dlp_actually_prints():
+    """Real output carries a FLOAT fps: `rcq 1080 60.0`, the relay's own example.
+
+    The first version required an integer fps, required it to be present, and
+    anchored to end-of-line — so it matched nothing yt-dlp ever emits, and every
+    YouTube candidate on the box was rejected as "not live". The unit test hid it
+    because its vector ("rcq 1080 60") was invented rather than observed.
+    """
+    assert st.parse_rcq("rcq 1080 60.0")[0] == 1080
+    assert st.parse_rcq("some noise\nrcq 720 30.0\nmore")[0] == 720
+    assert st.parse_rcq("rcq 480 NA")[0] == 480       # fps unavailable, height is not
+    assert st.parse_rcq("rcq 1080")[0] == 1080        # fps absent entirely
+    assert st.parse_rcq("rcq NA NA") is None          # no height -> unusable
     assert st.parse_rcq("") is None
     assert st.parse_rcq("rcq") is None
+
+
+def t_parse_rcq_agrees_with_the_relay_regex():
+    """Drift guard: the relay emits this line, so its parser is the reference."""
+    with open(os.path.join(ROOT, "src", "relay", "racecast-feeds.py"),
+              encoding="utf-8") as fh:
+        m = re.search(r'_YTDLP_QUALITY_RE = re\.compile\(r"([^"]+)"', fh.read())
+    assert m, "the relay's rcq regex moved — re-point this guard"
+    relay_re = re.compile(m.group(1), re.M)
+    for text in ("rcq 1080 60.0", "rcq 720 30", "rcq 480 NA", "rcq 1080",
+                 "rcq NA NA", "", "rcq", "noise\nrcq 1440 50.0"):
+        mine = st.parse_rcq(text)
+        theirs = relay_re.search(text)
+        assert (mine is None) == (theirs is None), text
+        if mine:
+            assert mine[0] == int(theirs.group(1)), text
 
 
 def t_parse_js_runtimes():

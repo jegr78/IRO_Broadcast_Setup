@@ -79,16 +79,29 @@ def rank_by_viewers(candidates):
 
 # ----------------------------------------------------------------- parsing
 
-_RCQ_RE = re.compile(r"^rcq\s+(\d+)\s+(\d+)\s*$", re.MULTILINE)
+# Mirrors the relay's _YTDLP_QUALITY_RE. Real output is `rcq 1080 60.0` — fps is
+# a FLOAT, is "NA" when unavailable, and can be absent entirely. Requiring an
+# integer fps here made every YouTube candidate look "not live".
+_RCQ_RE = re.compile(r"^rcq\s+(\d+)(?:\s+(\S+))?", re.MULTILINE)
 _JS_RUNTIME_RE = re.compile(r"JS runtimes:\s*(\S+)")
 _LADDER_RE = re.compile(r"^(\d+)p\d*$")
 
 
 def parse_rcq(text):
     """(height, fps) from the relay's extra `--print "rcq %(height)s %(fps)s"`
-    line, or None when yt-dlp printed NA (no height on this format)."""
+    line, or None when yt-dlp printed no height for this format.
+
+    fps comes back as a float when yt-dlp gives one and None otherwise ("NA", or
+    the field missing). Only the height decides acceptance; fps is recorded.
+    """
     m = _RCQ_RE.search(text or "")
-    return (int(m.group(1)), int(m.group(2))) if m else None
+    if not m:
+        return None
+    try:
+        fps = float(m.group(2))
+    except (TypeError, ValueError):
+        fps = None
+    return int(m.group(1)), fps
 
 
 def parse_js_runtimes(text):

@@ -6892,7 +6892,11 @@ def _smoke_yt_probe(url, cookies):
     if rc != 0:
         return None, txt.strip().splitlines()[-1][:160] if txt.strip() else "resolve failed"
     rcq = sm.parse_rcq(txt)
-    return (rcq[0] if rcq else None), ""
+    if rcq:
+        return rcq[0], ""
+    # Exit 0 with no rcq line: an empty note here let the generic "not live"
+    # reason win and hid a parser bug behind a plausible-sounding rejection.
+    return None, "yt-dlp exited 0 but printed no rcq line"
 
 
 def _smoke_twitch_candidates(category):
