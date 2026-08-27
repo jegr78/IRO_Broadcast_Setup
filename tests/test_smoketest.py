@@ -197,6 +197,15 @@ def t_arm_violations_sees_the_handover_disarm():
     assert st.arm_violations(rundown) == ["BACK TO A"]
 
 
+def t_arm_verdict_rests_on_bytes_not_on_the_arm_call():
+    """Manual arm off is a machine setting; the feed self-arms and bytes still decide."""
+    assert st.arm_verdict(True, True)[0] == st.PASS
+    assert st.arm_verdict(False, True)[0] == st.PASS
+    assert "self-armed" in st.arm_verdict(False, True)[1]
+    assert st.arm_verdict(True, False)[0] == st.FAIL
+    assert st.arm_verdict(False, False)[0] == st.FAIL   # no bytes is a real failure
+
+
 def t_program_audio_skips_when_the_endpoint_is_absent():
     """Fan-out off is a machine setting; blaming ffmpeg for it would be a false red."""
     assert st.program_audio_verdict(64000)[0] == st.PASS
@@ -293,8 +302,7 @@ def t_state_probe():
 def t_hard_and_soft_classification():
     """Environment problems must not redden a run about the toolchain."""
     assert st.severity_for("feed_a_bytes", False) == st.FAIL
-    assert st.severity_for("program_audio", False) == st.FAIL
-    assert st.severity_for("arm_b", False) == st.FAIL
+    assert st.severity_for("hud_data", False) == st.FAIL
     assert st.severity_for("obs_standby", False) == st.WARN
     assert st.severity_for("companion", False) == st.WARN
     assert st.severity_for("feed_a_bytes", True) == st.PASS

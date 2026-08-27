@@ -423,6 +423,20 @@ class Result:
         return f"<Result {self.name} {self.severity}>"
 
 
+def arm_verdict(manual_arm, bytes_ok):
+    """(status, note) for an ARM step. Bytes are the signal, not the arm call.
+
+    With `RACECAST_MANUAL_FEED_ARM=0` the feeds pre-warm themselves and the relay
+    refuses `feed/X/activate` outright ("manual feed arm disabled"), so issuing it
+    would redden the run over a documented machine setting. The caller skips the
+    call in that mode; the byte wait still decides, because a feed that delivers
+    nothing is a toolchain failure either way.
+    """
+    if bytes_ok:
+        return PASS, "" if manual_arm else "feed self-armed (manual arm off)"
+    return FAIL, "no bytes after ARM"
+
+
 PROGRAM_AUDIO_MIN_BYTES = 1024
 
 

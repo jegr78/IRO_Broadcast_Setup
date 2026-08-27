@@ -7066,13 +7066,19 @@ def _smoke_rundown(say):
     """Run the director rundown, reading OBS back after every step."""
     sm = _sm()
     results, on_air = [], "Feed A"
+    # Manual arm is a machine setting (`RACECAST_MANUAL_FEED_ARM`). With it off the
+    # feeds pre-warm themselves and the relay REFUSES feed/X/activate, so the arm
+    # call is skipped and the byte wait alone decides — see sm.arm_verdict.
+    manual_arm = bool(_smoke_relay_get("status").get("manual_feed_arm"))
+    if not manual_arm:
+        say("  note: manual feed arm is off — feeds self-arm, ARM steps skip the call")
     for i, step in enumerate(sm.RUNDOWN, start=1):
         name = f"step{i:02d}_{step.label.lower().replace(' ', '_')}"
         if step.label == "STINT A":
             on_air = "Feed A"
         elif step.label == "STINT B":
             on_air = "Feed B"
-        res = _smoke_apply(step)
+        res = {} if step.kind == "arm" and not manual_arm else _smoke_apply(step)
         if isinstance(res, dict) and res.get("error"):
             results.append(sm.Result(name, sm.FAIL, str(res["error"])[:120]))
             say(f"  {step.label}: FAILED — {res['error']}")
@@ -7080,8 +7086,9 @@ def _smoke_rundown(say):
         if step.wait_for_bytes:
             which = "B" if "B" in step.label else "A"
             ok = _smoke_wait_bytes(which, say)
-            results.append(sm.Result(name, sm.severity_for(f"arm_{which.lower()}", ok),
-                                     "" if ok else "no bytes after ARM"))
+            status, note = sm.arm_verdict(manual_arm, ok)
+            results.append(sm.Result(name, status, note))
+            say(f"  {step.label}: " + ("ok" if ok else "NO BYTES"))
             if not ok:
                 continue
         if step.label == "NEXT":
