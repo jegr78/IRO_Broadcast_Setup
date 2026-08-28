@@ -31,6 +31,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 import urllib.parse
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"   # RFC 6455 magic
@@ -1385,6 +1386,55 @@ def set_scene_item_transform(scene, source, transform, host="127.0.0.1", port=No
     finally:
         if own:
             session.close()
+
+
+OBS_NOT_READY_CODE = 207
+
+
+def is_not_ready(note):
+    """True when a best-effort note is obs-websocket's "OBS is not ready to
+    perform the request" (code 207) — the window between OBS accepting the
+    connection and having finished loading. Pure."""
+    text = str(note or "")
+    return str(OBS_NOT_READY_CODE) in text and "not ready" in text.lower()
+
+
+def wait_until_ready(timeout=30.0, interval=1.0, host="127.0.0.1", port=None,
+                     password=None, probe=None, clock=time.monotonic,
+                     sleep=time.sleep):
+    """Poll until obs-websocket can actually serve a request. Returns (ok, note).
+
+    `app_running("obs")` only proves the PROCESS exists. obs-websocket accepts
+    the connection several seconds earlier than OBS can answer, replying 207 in
+    between — so a bring-up that launched OBS itself ran the scene-collection
+    check, the page refresh and the Standby switch inside that window and
+    silently skipped all three. Best effort: never raises.
+    """
+    probe = _probe_ready if probe is None else probe
+    deadline = clock() + timeout
+    note = ""
+    while True:
+        ok, note = probe(host, port, password)
+        if ok:
+            return True, ""
+        if clock() >= deadline:
+            return False, note or "OBS did not become ready"
+        sleep(interval)
+
+
+def _probe_ready(host, port, password):
+    """(ready, note) from one cheap request. Not ready and unreachable are both
+    False — the caller only waits, it does not diagnose."""
+    session, note = _connect(host, port, password, 2.0)
+    if session is None:
+        return False, note
+    try:
+        session.request("GetVersion", {})
+        return True, ""
+    except Exception as exc:                         # noqa: BLE001 — best effort
+        return False, str(exc) or exc.__class__.__name__
+    finally:
+        session.close()
 
 
 def get_scene_collection(host="127.0.0.1", port=None, password=None, timeout=2.0,
