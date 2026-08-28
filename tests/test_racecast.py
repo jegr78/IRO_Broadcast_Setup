@@ -4877,6 +4877,78 @@ def t_smoketest_teardown_failure_reaches_the_verdict():
     assert (seen.get("entry") or {}).get("cleared"), "pre-run URLs not recorded"
 
 
+# --- _open_url: the browser must not inherit the frozen library path ---------
+# Same failure class as #572/#573 at a site that fix did not cover. Measured on
+# the box: under LD_LIBRARY_PATH=/tmp/_MEI… even /bin/bash dies with "undefined
+# symbol: rl_print_keybinding", so google-chrome never starts — and webbrowser
+# sends the child's stderr to devnull, so nothing says why.
+
+def t_url_opener_argv_prefers_xdg_open():
+    got = m.url_opener_argv("linux", "http://127.0.0.1:8089/",
+                            which=lambda t: "/usr/bin/" + t)
+    assert got == ["/usr/bin/xdg-open", "http://127.0.0.1:8089/"], got
+
+
+def t_url_opener_argv_falls_through_to_gio():
+    """gio takes the URL after an `open` verb, unlike the others."""
+    got = m.url_opener_argv("linux", "http://h/",
+                            which=lambda t: "/usr/bin/gio" if t == "gio" else None)
+    assert got == ["/usr/bin/gio", "open", "http://h/"], got
+
+
+def t_url_opener_argv_macos_uses_open():
+    got = m.url_opener_argv("darwin", "http://h/", which=lambda t: "/usr/bin/" + t)
+    assert got == ["/usr/bin/open", "http://h/"], got
+
+
+def t_url_opener_argv_none_when_there_is_nothing_to_spawn():
+    # Windows has no library-path problem, so there is nothing to fix there.
+    assert m.url_opener_argv("win32", "http://h/", which=lambda t: "C:/x") is None
+    # A Linux box without any opener: fall back rather than invent one.
+    assert m.url_opener_argv("linux", "http://h/", which=lambda t: None) is None
+
+
+def _capture_open_url(env, platform="linux", which=lambda t: "/usr/bin/" + t):
+    """Run _open_url with stubbed seams; returns (popen_calls, browser_calls)."""
+    popen_calls, wb_calls = [], []
+    saved = m.sv.external_tool_env
+    try:
+        m.sv.external_tool_env = lambda *a, **k: env
+        m._open_url("http://127.0.0.1:8089/", which=which, platform=platform,
+                    popen=lambda argv, **kw: popen_calls.append((argv, kw)),
+                    browser=wb_calls.append)
+    finally:
+        m.sv.external_tool_env = saved
+    return popen_calls, wb_calls
+
+
+def t_open_url_hands_the_browser_a_de_pyinstaller_env():
+    clean = {"PATH": "/usr/bin"}          # what external_tool_env returns when frozen
+    popen_calls, wb_calls = _capture_open_url(clean)
+    assert not wb_calls, "webbrowser.open would inherit the frozen environment"
+    assert len(popen_calls) == 1, popen_calls
+    argv, kw = popen_calls[0]
+    assert argv == ["/usr/bin/xdg-open", "http://127.0.0.1:8089/"], argv
+    assert kw["env"] is clean, kw
+    # Detached, or the browser dies with the CLI that opened it.
+    assert kw.get("start_new_session") is True, kw
+
+
+def t_open_url_uses_webbrowser_off_the_frozen_build():
+    """external_tool_env() returns None when not frozen — a source run must keep
+    webbrowser's own browser discovery, unchanged."""
+    popen_calls, wb_calls = _capture_open_url(None)
+    assert wb_calls == ["http://127.0.0.1:8089/"], wb_calls
+    assert not popen_calls, popen_calls
+
+
+def t_open_url_falls_back_when_there_is_no_opener():
+    popen_calls, wb_calls = _capture_open_url({"PATH": "/usr/bin"},
+                                              which=lambda t: None)
+    assert wb_calls == ["http://127.0.0.1:8089/"], wb_calls
+    assert not popen_calls, popen_calls
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):

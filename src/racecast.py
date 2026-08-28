@@ -3294,9 +3294,55 @@ def streams_logs(rest):    _logs_cmd("streams", rest)
 def _http_url(host, port, path):
     return f"http://{host}:{port}{path}"
 
-def _open_url(url):
+# The URL openers we will spawn ourselves, in preference order. `gio` takes the
+# URL after an `open` verb; the others take it directly.
+URL_OPENERS = ("xdg-open", "gio", "kde-open", "gnome-open")
+
+
+def url_opener_argv(platform, url, which=shutil.which):
+    """argv for the OS's URL opener, or None when there is nothing to spawn.
+
+    A frozen build cannot use `webbrowser.open()`: it starts the browser as a
+    child of THIS process, which inherits the PyInstaller extraction dir on
+    LD_LIBRARY_PATH and dies in the dynamic linker before main() — the #572
+    failure class, at a site #573 did not cover. Measured on the broadcast box:
+    under `LD_LIBRARY_PATH=/tmp/_MEI…` even `/bin/bash` dies with "undefined
+    symbol: rl_print_keybinding", so the browser never starts, and `webbrowser`
+    sends the child's stderr to devnull so nothing says why. Spawning the opener
+    ourselves is what lets us hand it a de-PyInstaller environment.
+
+    Windows has no library-path problem, so it returns None and keeps
+    `webbrowser` — as does a box with none of these openers installed.
+    """
+    if platform.startswith("win"):
+        return None
+    if platform == "darwin":
+        return [which("open") or "open", url]
+    for tool in URL_OPENERS:
+        path = which(tool)
+        if path:
+            return [path, "open", url] if tool == "gio" else [path, url]
+    return None
+
+
+def _open_url(url, which=shutil.which, platform=None, popen=None, browser=None):
+    """Open `url` in the producer's browser. `which`/`platform`/`popen`/`browser`
+    are test seams (same pattern as `_gui_spawn`), so a unit test never has to
+    patch the stdlib modules this reaches for."""
     print(f"Opening {url}")
-    webbrowser.open(url)
+    env = sv.external_tool_env()            # None off the frozen binary
+    plat = sys.platform if platform is None else platform
+    argv = url_opener_argv(plat, url, which=which) if env is not None else None
+    if argv is not None:
+        try:
+            # Detached: the browser must outlive the CLI that opened it.
+            (popen or subprocess.Popen)(
+                argv, env=env, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True)
+            return
+        except OSError as exc:
+            print(f"  {argv[0]} failed ({exc}) — trying the default browser")
+    (browser or webbrowser.open)(url)
 
 def relay_open_panel(rest):
     _open_url(_http_url("127.0.0.1", RELAY_PORT, "/panel"))
