@@ -1987,6 +1987,42 @@ def t_probe_device_options_unreachable_is_quiet():
     assert out["note"] and out["mic_note"]           # both carry the connect reason
 
 
+# ------------------------------------------------------------ readiness
+
+def t_is_not_ready_recognises_the_207_note():
+    """obs-websocket answers 207 between accepting the socket and being able to
+    serve — the window that silently swallowed the scene-collection check, the
+    page refresh and the Standby switch on a just-launched OBS."""
+    note = ("GetSceneCollectionList failed: {'code': 207, 'comment': "
+            "'OBS is not ready to perform the request.', 'result': False}")
+    assert m.is_not_ready(note)
+    assert not m.is_not_ready("OBS WebSocket not reachable on 127.0.0.1:4455")
+    assert not m.is_not_ready("")
+    assert not m.is_not_ready(None)
+
+
+def t_wait_until_ready_polls_until_obs_answers():
+    calls = []
+
+    def _probe(host, port, password):
+        calls.append(1)
+        return (len(calls) >= 3), "not ready yet"
+
+    ticks = iter([0, 1, 2, 3, 4, 5, 6])
+    ok, note = m.wait_until_ready(timeout=10, interval=0, probe=_probe,
+                                  clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert ok and note == "", note
+    assert len(calls) == 3, calls
+
+
+def t_wait_until_ready_gives_up_and_says_why():
+    ticks = iter([0, 5, 11])
+    ok, note = m.wait_until_ready(timeout=10, interval=0,
+                                  probe=lambda h, p, w: (False, "still loading"),
+                                  clock=lambda: next(ticks), sleep=lambda _s: None)
+    assert not ok and note == "still loading", note
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
