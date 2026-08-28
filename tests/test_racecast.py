@@ -4521,7 +4521,7 @@ def t_smoketest_tears_down_even_when_event_start_aborts():
 
     def _boom(rest):
         calls.append("start")
-        raise SystemExit("NOT READY — resolve the FAIL items above.")
+        raise SystemExit(1)          # event_status exits 1 when FAILs remain
 
     m.event_start = _boom
     m.event_stop = lambda rest: calls.append("stop")
@@ -4543,6 +4543,56 @@ def t_smoketest_tears_down_even_when_event_start_aborts():
     assert "history" in calls, "verdict/history lost"
     assert "exit1" in calls, calls
 
+
+
+def t_smoketest_runs_the_rundown_when_event_start_exits_zero():
+    """`event start` ends through event_status, which exits 0 when the stack is
+    ready. Treating every SystemExit as an abort skipped the whole rundown on a
+    healthy bring-up — seen on the box with OBS, Discord and the relay all up."""
+    calls = []
+    saved = {name: getattr(m, name) for name in
+             ("_active_profile_name", "_relay_is_alive", "_smoke_confirm",
+              "_smoke_fingerprint", "_smoke_vocab", "_smoke_discover",
+              "_smoke_js_runtime", "_smoke_schedule_rows", "_smoke_write_schedule",
+              "_smoke_append_history", "event_start", "event_stop",
+              "_smoke_rundown", "_smoke_observe")}
+    saved_env = {k: os.environ.get(k) for k in
+                 ("RACECAST_SHEET_ID", "RACECAST_SHEET_PUSH_URL")}
+    os.environ["RACECAST_SHEET_ID"] = "sheet"
+    os.environ["RACECAST_SHEET_PUSH_URL"] = "https://example.invalid/w"
+    m._active_profile_name = lambda *a, **k: "testing"
+    m._relay_is_alive = lambda *a, **k: False
+    m._smoke_confirm = lambda *a, **k: None
+    m._smoke_fingerprint = lambda: {"yt-dlp": "1", "js_runtime": "unknown"}
+    m._smoke_vocab = lambda sheet_id: (["q"], ["c"])
+    m._smoke_discover = lambda *a, **k: (["https://www.youtube.com/watch?v=1",
+                                          "https://www.youtube.com/watch?v=2"],
+                                         ["https://www.twitch.tv/x"], [])
+    m._smoke_js_runtime = lambda url: "deno-x"
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"],
+                                               ["https://www.youtube.com/watch?v=o", "A"],
+                                               ["https://www.twitch.tv/o", "B"],
+                                               ["https://youtu.be/o", "C"]]
+    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_append_history = lambda entry: None
+    m.event_start = lambda rest: (_ for _ in ()).throw(SystemExit(0))
+    m.event_stop = lambda rest: calls.append("stop")
+    m._smoke_rundown = lambda say: calls.append("rundown") or []
+    m._smoke_observe = lambda minutes, say: calls.append("observe") or []
+    try:
+        try:
+            m.smoketest_cmd(["--json", "--minutes", "1"])
+        except SystemExit:
+            pass
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert calls == ["rundown", "observe", "stop"], calls
 
 def t_smoketest_teardown_failure_reaches_the_verdict():
     """A failing `event stop` used to be a say() note only — suppressed entirely

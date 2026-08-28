@@ -7423,15 +7423,20 @@ def smoketest_cmd(rest):
     # stack (relay, Companion, an enabled Funnel) is already live by then. Arming
     # the teardown only on a successful bring-up once left all three running —
     # including the PUBLIC Funnel — with no verdict printed at all.
+    aborted = ""
     try:
         try:
             event_start(["--title", title])
         except SystemExit as exc:
-            # Not a smoke-test failure by itself: the readiness report names what
-            # is missing, and the rundown below measures what that costs.
-            results.append(sm.Result("event_start", sm.FAIL, str(exc)[:160]
-                                     or "event start reported NOT READY"))
-            say(f"  event start aborted: {exc}")
+            # event_start ALWAYS ends through event_status, which exits 0 when the
+            # stack is ready and 1 when FAILs remain — so only a NON-ZERO code is
+            # an aborted bring-up. Treating every SystemExit as one skipped the
+            # entire rundown on a perfectly healthy stack.
+            if exc.code not in (0, None):
+                aborted = str(exc.code)[:160] or "NOT READY"
+        if aborted:
+            results.append(sm.Result("event_start", sm.FAIL, aborted))
+            say("  event start reported NOT READY — skipping the rundown")
         else:
             say("\nRundown")
             results += _smoke_rundown(say)
