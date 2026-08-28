@@ -65,3 +65,16 @@ paths = [
 regexes = [
   '''dGhlIHNhbXBsZSBub25jZQ==''',
 ]
+
+# The Twitch WEB-PLAYER Client-ID used by the smoke test's dependency-free
+# channel discovery (#570). It is not a credential: every twitch.tv page sends
+# it, streamlink embeds the same literal in its own Twitch plugin, and it grants
+# nothing beyond the public, unauthenticated GQL surface. The default
+# twitch-api-token rule cannot tell it apart from a real app token.
+[[allowlists]]
+description = "Public Twitch web-player Client-ID in the smoke test (#570)"
+condition = "AND"
+paths = ['''src/scripts/smoketest\.py''']
+regexes = [
+  '''kimne78kx3ncx6brgo4mv6wki5h1ko''',
+]

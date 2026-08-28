@@ -4461,6 +4461,334 @@ def t_gui_spawn_keeps_quiet_about_a_healthy_app():
         sys.stdout = saved_stdout
     assert note == ""
     assert out.getvalue() == "", out.getvalue()
+# --------------------------------------------------------- smoke-test glue
+# http_util.post_json returns the RAW BODY (unlike get_json, which parses), so
+# every POST site has to decode it. The pure smoketest module cannot catch that
+# — these exercise the glue in racecast.py itself, with the network stubbed.
+
+class _StubHttp:
+    """Records calls and replays canned bodies, in http_util's own return shapes."""
+
+    # The real module re-exports this so callers never import urllib to catch it.
+    import urllib.error as _ue
+    HTTPError = _ue.HTTPError
+    del _ue
+
+    def __init__(self, post=b"{}", get=b"{}"):
+        self._post, self._get = post, get
+        self.posts = []
+
+    def post_json(self, url, obj, *, headers=None, timeout=None):
+        self.posts.append((url, obj))
+        return self._post
+
+    def get_bytes(self, url, *, headers=None, timeout=None):
+        return self._get
+
+    def get_json(self, url, *, headers=None, timeout=None):
+        import json as _json
+        return _json.loads(self._get.decode("utf-8"))
+
+
+def _with_stub_http(stub, fn):
+    saved = m.http_util
+    m.http_util = stub
+    try:
+        return fn()
+    finally:
+        m.http_util = saved
+
+
+def t_smoke_push_reads_the_webhook_ok_flag():
+    stub = _StubHttp(post=b'{"ok": true}')
+    ok, note = _with_stub_http(stub, lambda: m._smoke_push("https://example.invalid/w", 1, "u"))
+    assert ok and note == "", note
+    # Column A only: Streamer and Stint must never be sent.
+    assert stub.posts[0][1] == {"action": "schedule", "row": 1, "url": "u"}
+
+
+def t_smoke_push_reports_a_rejected_write():
+    stub = _StubHttp(post=b'{"ok": false, "error": "nope"}')
+    ok, _note = _with_stub_http(stub, lambda: m._smoke_push("https://example.invalid/w", 1, "u"))
+    assert not ok
+
+
+def t_smoke_relay_post_returns_a_parsed_reply():
+    stub = _StubHttp(post=b'{"scene": "Standby", "muted": {}}')
+    got = _with_stub_http(stub, lambda: m._smoke_relay_post("obs/state", {}))
+    assert got["scene"] == "Standby"      # a bytes reply would have no .get
+
+
+def t_smoke_twitch_candidates_parses_the_gql_reply():
+    body = (b'{"data": {"game": {"streams": {"edges": [{"node": '
+            b'{"title": "t", "viewersCount": 9, "broadcaster": {"login": "someone"}}}]}}}}')
+    stub = _StubHttp(post=body)
+    got = _with_stub_http(stub, lambda: m._smoke_twitch_candidates("iRacing"))
+    assert [c["login"] for c in got] == ["someone"]
+
+
+def t_smoke_twitch_candidates_survives_a_junk_reply():
+    """Discovery is best effort: a malformed body must not abort the run."""
+    stub = _StubHttp(post=b"<html>503</html>")
+    got = _with_stub_http(stub, lambda: m._smoke_twitch_candidates("iRacing"))
+    assert got == []
+
+
+def _http_error(code, body):
+    import io, urllib.error
+    return urllib.error.HTTPError("http://127.0.0.1/x", code, "err", {},
+                                  io.BytesIO(body))
+
+
+def t_smoke_relay_post_keeps_the_error_body_of_a_503():
+    """The relay answers a dead OBS with 503 + {"error": "obs unavailable"}.
+    urllib raises on 5xx, so without reading the body back the run only ever sees
+    "HTTP Error 503" — and the SPLIT step fails hard instead of warning."""
+    class _Raiser(_StubHttp):
+        def post_json(self, url, obj, *, headers=None, timeout=None):
+            raise _http_error(503, b'{"error": "obs unavailable"}')
+
+    got = _with_stub_http(_Raiser(), lambda: m._smoke_relay_post("obs/split-audio", {}))
+    assert got["error"] == "obs unavailable", got
+    assert m._sm().step_error_verdict(got["error"])[0] == m._sm().WARN
+
+
+def t_smoke_relay_post_falls_back_to_the_status_code():
+    """A non-JSON error page must still produce a readable note, not a traceback."""
+    class _Raiser(_StubHttp):
+        def post_json(self, url, obj, *, headers=None, timeout=None):
+            raise _http_error(500, b"<html>boom</html>")
+
+    got = _with_stub_http(_Raiser(), lambda: m._smoke_relay_post("obs/state", {}))
+    assert "500" in got["error"], got
+
+
+def t_smoke_capture_de_pyinstallers_the_child_environment():
+    """yt-dlp and streamlink run under the SYSTEM python, and the frozen
+    bootloader puts our bundled libcrypto on their library path — they then die
+    and the fingerprint reports them as missing tools. Found on the box: the
+    first real run said "yt-dlp: not on PATH" while /usr/bin/yt-dlp worked fine.
+    services.external_tool_env() is the house fix and is None off the frozen
+    binary, so a source run is unaffected."""
+    seen = {}
+    saved_run, saved_env = m.subprocess.run, m.sv.external_tool_env
+    sentinel = {"LD_LIBRARY_PATH": "/usr/lib"}
+
+    class _P:
+        returncode, stdout, stderr = 0, "ok", ""
+
+    m.sv.external_tool_env = lambda *a, **k: sentinel
+    m.subprocess.run = lambda argv, **kw: seen.update(kw) or _P()
+    try:
+        rc, txt = m._smoke_capture(["yt-dlp", "--version"])
+    finally:
+        m.subprocess.run, m.sv.external_tool_env = saved_run, saved_env
+    assert rc == 0 and txt == "ok"
+    assert seen.get("env") is sentinel, seen.get("env")
+
+
+def t_smoke_capture_separates_a_missing_tool_from_a_broken_one():
+    """'not on PATH' sent me chasing a PATH problem that did not exist."""
+    saved = m.subprocess.run
+
+    def _boom(argv, **kw):
+        raise FileNotFoundError(argv[0])
+
+    m.subprocess.run = _boom
+    try:
+        rc, txt = m._smoke_capture(["nope", "--version"])
+    finally:
+        m.subprocess.run = saved
+    assert rc == 127 and "not found" in txt
+
+
+
+def t_rundown_reports_each_step_once():
+    """Seen on a green run: every ARM step appeared twice. The byte-wait branch
+    fell through into the scene-less branch and appended a second result under
+    the same name — inflating the count and half-reporting a failing arm."""
+    saved = {name: getattr(m, name) for name in
+             ("_smoke_relay_get", "_smoke_relay_post", "_smoke_apply",
+              "_smoke_wait_bytes")}
+    m._smoke_relay_get = lambda path, **kw: {"manual_feed_arm": True,
+                                             "live": {"feed": "B"}}
+    m._smoke_relay_post = lambda path, body, **kw: {"ok": True, "scene": None,
+                                                    "sources": [], "audio": []}
+    m._smoke_apply = lambda step: {"ok": True}
+    m._smoke_wait_bytes = lambda which, say: True
+    saved_pause = m.SMOKE_STEP_PAUSE_S
+    m.SMOKE_STEP_PAUSE_S = 0
+    try:
+        results = m._smoke_rundown(lambda msg: None)
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        m.SMOKE_STEP_PAUSE_S = saved_pause
+    names = [r.name for r in results]
+    assert len(names) == len(set(names)), [n for n in names if names.count(n) > 1]
+    assert len(names) == len(m._sm().RUNDOWN), (len(names), len(m._sm().RUNDOWN))
+
+def t_smoketest_tears_down_even_when_event_start_aborts():
+    """`event start` exits non-zero when its readiness report has a FAIL — but by
+    then the relay, Companion and a PUBLIC Funnel are already up. Arming the
+    teardown only on a successful bring-up left all three running on the box,
+    with no verdict printed at all."""
+    calls = []
+    saved = {name: getattr(m, name) for name in
+             ("_active_profile_name", "_relay_is_alive", "_smoke_confirm",
+              "_smoke_fingerprint", "_smoke_vocab", "_smoke_discover",
+              "_smoke_js_runtime", "_smoke_schedule_rows", "_smoke_write_schedule",
+              "_smoke_append_history", "event_start", "event_stop")}
+    saved_env = {k: os.environ.get(k) for k in
+                 ("RACECAST_SHEET_ID", "RACECAST_SHEET_PUSH_URL")}
+    os.environ["RACECAST_SHEET_ID"] = "sheet"
+    os.environ["RACECAST_SHEET_PUSH_URL"] = "https://example.invalid/w"
+    m._active_profile_name = lambda *a, **k: "testing"
+    m._relay_is_alive = lambda *a, **k: False
+    m._smoke_confirm = lambda *a, **k: None
+    m._smoke_fingerprint = lambda: {"yt-dlp": "1", "js_runtime": "unknown"}
+    m._smoke_vocab = lambda sheet_id: (["q"], ["c"])
+    m._smoke_discover = lambda *a, **k: (["https://www.youtube.com/watch?v=1",
+                                          "https://www.youtube.com/watch?v=2"],
+                                         ["https://www.twitch.tv/x"], [])
+    m._smoke_js_runtime = lambda url: "deno-x"
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"], ["a", "b"],
+                                               ["c", "d"], ["e", "f"]]
+    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_append_history = lambda entry: calls.append("history")
+
+    def _boom(rest):
+        calls.append("start")
+        raise SystemExit(1)          # event_status exits 1 when FAILs remain
+
+    m.event_start = _boom
+    m.event_stop = lambda rest: calls.append("stop")
+    try:
+        try:
+            m.smoketest_cmd(["--json", "--minutes", "1"])
+        except SystemExit as exc:
+            calls.append(f"exit{exc.code}")
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert "start" in calls, calls
+    assert "stop" in calls, "teardown skipped — services left running"
+    assert "history" in calls, "verdict/history lost"
+    assert "exit1" in calls, calls
+
+
+
+def t_smoketest_runs_the_rundown_when_event_start_exits_zero():
+    """`event start` ends through event_status, which exits 0 when the stack is
+    ready. Treating every SystemExit as an abort skipped the whole rundown on a
+    healthy bring-up — seen on the box with OBS, Discord and the relay all up."""
+    calls = []
+    saved = {name: getattr(m, name) for name in
+             ("_active_profile_name", "_relay_is_alive", "_smoke_confirm",
+              "_smoke_fingerprint", "_smoke_vocab", "_smoke_discover",
+              "_smoke_js_runtime", "_smoke_schedule_rows", "_smoke_write_schedule",
+              "_smoke_append_history", "event_start", "event_stop",
+              "_smoke_rundown", "_smoke_observe")}
+    saved_env = {k: os.environ.get(k) for k in
+                 ("RACECAST_SHEET_ID", "RACECAST_SHEET_PUSH_URL")}
+    os.environ["RACECAST_SHEET_ID"] = "sheet"
+    os.environ["RACECAST_SHEET_PUSH_URL"] = "https://example.invalid/w"
+    m._active_profile_name = lambda *a, **k: "testing"
+    m._relay_is_alive = lambda *a, **k: False
+    m._smoke_confirm = lambda *a, **k: None
+    m._smoke_fingerprint = lambda: {"yt-dlp": "1", "js_runtime": "unknown"}
+    m._smoke_vocab = lambda sheet_id: (["q"], ["c"])
+    m._smoke_discover = lambda *a, **k: (["https://www.youtube.com/watch?v=1",
+                                          "https://www.youtube.com/watch?v=2"],
+                                         ["https://www.twitch.tv/x"], [])
+    m._smoke_js_runtime = lambda url: "deno-x"
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"],
+                                               ["https://www.youtube.com/watch?v=o", "A"],
+                                               ["https://www.twitch.tv/o", "B"],
+                                               ["https://youtu.be/o", "C"]]
+    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_append_history = lambda entry: None
+    m.event_start = lambda rest: (_ for _ in ()).throw(SystemExit(0))
+    m.event_stop = lambda rest: calls.append("stop")
+    m._smoke_rundown = lambda say: calls.append("rundown") or []
+    m._smoke_observe = lambda minutes, say: calls.append("observe") or []
+    try:
+        try:
+            m.smoketest_cmd(["--json", "--minutes", "1"])
+        except SystemExit:
+            pass
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert calls == ["rundown", "observe", "stop"], calls
+
+def t_smoketest_teardown_failure_reaches_the_verdict():
+    """A failing `event stop` used to be a say() note only — suppressed entirely
+    under --json — so a run could print PASS, exit 0 and leave the relay pulling
+    two strangers' streams. It has to become a check."""
+    seen = {}
+    saved = {name: getattr(m, name) for name in
+             ("_active_profile_name", "_relay_is_alive", "_smoke_confirm",
+              "_smoke_fingerprint", "_smoke_vocab", "_smoke_discover",
+              "_smoke_js_runtime", "_smoke_schedule_rows", "_smoke_write_schedule",
+              "_smoke_append_history", "event_start", "event_stop",
+              "_smoke_rundown", "_smoke_observe")}
+    saved_env = {k: os.environ.get(k) for k in
+                 ("RACECAST_SHEET_ID", "RACECAST_SHEET_PUSH_URL")}
+    os.environ["RACECAST_SHEET_ID"] = "sheet"
+    os.environ["RACECAST_SHEET_PUSH_URL"] = "https://example.invalid/w"
+    m._active_profile_name = lambda *a, **k: "testing"
+    m._relay_is_alive = lambda *a, **k: False
+    m._smoke_confirm = lambda *a, **k: None
+    m._smoke_fingerprint = lambda: {"yt-dlp": "1", "js_runtime": "unknown"}
+    m._smoke_vocab = lambda sheet_id: (["q"], ["c"])
+    m._smoke_discover = lambda *a, **k: (["https://www.youtube.com/watch?v=1",
+                                          "https://www.youtube.com/watch?v=2"],
+                                         ["https://www.twitch.tv/x"], [])
+    m._smoke_js_runtime = lambda url: "deno-x"
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"],
+                                               ["https://www.youtube.com/watch?v=o", "A"],
+                                               ["https://www.twitch.tv/o", "B"],
+                                               ["https://youtu.be/o", "C"]]
+    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_append_history = lambda entry: seen.update(entry=entry)
+    m.event_start = lambda rest: None
+    m._smoke_rundown = lambda say: []
+    m._smoke_observe = lambda minutes, say: []
+
+    def _stop_boom(rest):
+        raise SystemExit("relay stop failed")
+
+    m.event_stop = _stop_boom
+    code = None
+    try:
+        try:
+            m.smoketest_cmd(["--json", "--minutes", "1"])
+        except SystemExit as exc:
+            code = exc.code
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    names = [c["name"] for c in (seen.get("entry") or {}).get("checks", [])]
+    assert "teardown" in names, names
+    assert code == 1, code
+    # The URLs the run blanked are recorded — nothing restores them.
+    assert (seen.get("entry") or {}).get("cleared"), "pre-run URLs not recorded"
 
 
 if __name__ == "__main__":

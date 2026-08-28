@@ -92,7 +92,7 @@ def build_target(launcher, workdir, version_file, sep, entry, name, windowed):
            "--hidden-import", "services", "--hidden-import", "companion_common",
            "--hidden-import", "companion_linux",
            "--hidden-import", "event", "--hidden-import", "preflight",
-           "--hidden-import", "speedtest",
+           "--hidden-import", "speedtest", "--hidden-import", "smoketest",
            "--hidden-import", "install_apps", "--hidden-import", "obs_ws",
            "--hidden-import", "overlay_build",
            # imported by src/ui/ui_server.py, which is itself loaded by path —
