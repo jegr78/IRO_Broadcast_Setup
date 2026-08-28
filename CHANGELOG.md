@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.10.0](https://github.com/jegr78/gt-racing-broadcast/compare/v1.9.0...v1.10.0) (2026-08-28)
+
+
+### Features
+
+* **smoketest:** verify the event core after a toolchain update ([#571](https://github.com/jegr78/gt-racing-broadcast/issues/571)) ([d6a3874](https://github.com/jegr78/gt-racing-broadcast/commit/d6a38747b7b33c58d6712fcbb00536a83cb35dd9))
+* **tools:** render league broadcast assets from a profile asset kit ([#562](https://github.com/jegr78/gt-racing-broadcast/issues/562)) ([774e2f3](https://github.com/jegr78/gt-racing-broadcast/commit/774e2f3b1983355f8de046594171dfb50ed8c097))
+
+
+### Bug Fixes
+
+* **event:** launch OBS and Discord without the frozen library path ([#573](https://github.com/jegr78/gt-racing-broadcast/issues/573)) ([45766d6](https://github.com/jegr78/gt-racing-broadcast/commit/45766d65ea416b49555a21fc95db126ff97fb2ac))
+* **hooks:** only treat a real merge as a merge ([#566](https://github.com/jegr78/gt-racing-broadcast/issues/566)) ([05dc572](https://github.com/jegr78/gt-racing-broadcast/commit/05dc5729e9ee199dc8511aa7d4e3568e68f8e03f))
+* **relay:** make the program-audio join decodable on an fMP4 feed ([#578](https://github.com/jegr78/gt-racing-broadcast/issues/578)) ([7450224](https://github.com/jegr78/gt-racing-broadcast/commit/7450224e4d194854b7373bbe339a514ed0e944db)), closes [#576](https://github.com/jegr78/gt-racing-broadcast/issues/576)
+* **smoketest:** confirm the sheet transition per row, not the webhook's HTTP result ([#574](https://github.com/jegr78/gt-racing-broadcast/issues/574)) ([490ec2d](https://github.com/jegr78/gt-racing-broadcast/commit/490ec2d71a9010f0ad7cd7d2af72eb08dee71553))
+* **ui:** keep serving after the OS reaps the frozen build's temp dir ([#564](https://github.com/jegr78/gt-racing-broadcast/issues/564)) ([9a30f54](https://github.com/jegr78/gt-racing-broadcast/commit/9a30f54450bba51e75390d1b272f75628d6f2708))
+
 ## [1.9.0](https://github.com/jegr78/gt-racing-broadcast/compare/v1.8.0...v1.9.0) (2026-08-03)
 
 
