@@ -7167,8 +7167,11 @@ def _smoke_rundown(say):
             status, note = sm.arm_verdict(manual_arm, ok)
             results.append(sm.Result(name, status, note))
             say(f"  {step.label}: " + ("ok" if ok else "NO BYTES"))
-            if not ok:
-                continue
+            # An ARM step is fully judged here. Falling through reached the
+            # scene-less branch below and appended a SECOND result under the same
+            # name — every arm was counted twice, and a failing one would have
+            # been half-reported as a PASS.
+            continue
         if step.label == "NEXT":
             # The handover moves the on-air feed; confirm the relay agrees rather
             # than assuming the rundown's bookkeeping is right.

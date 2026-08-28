@@ -4490,6 +4490,32 @@ def t_smoke_capture_separates_a_missing_tool_from_a_broken_one():
     assert rc == 127 and "not found" in txt
 
 
+
+def t_rundown_reports_each_step_once():
+    """Seen on a green run: every ARM step appeared twice. The byte-wait branch
+    fell through into the scene-less branch and appended a second result under
+    the same name — inflating the count and half-reporting a failing arm."""
+    saved = {name: getattr(m, name) for name in
+             ("_smoke_relay_get", "_smoke_relay_post", "_smoke_apply",
+              "_smoke_wait_bytes")}
+    m._smoke_relay_get = lambda path, **kw: {"manual_feed_arm": True,
+                                             "live": {"feed": "B"}}
+    m._smoke_relay_post = lambda path, body, **kw: {"ok": True, "scene": None,
+                                                    "sources": [], "audio": []}
+    m._smoke_apply = lambda step: {"ok": True}
+    m._smoke_wait_bytes = lambda which, say: True
+    saved_pause = m.SMOKE_STEP_PAUSE_S
+    m.SMOKE_STEP_PAUSE_S = 0
+    try:
+        results = m._smoke_rundown(lambda msg: None)
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        m.SMOKE_STEP_PAUSE_S = saved_pause
+    names = [r.name for r in results]
+    assert len(names) == len(set(names)), [n for n in names if names.count(n) > 1]
+    assert len(names) == len(m._sm().RUNDOWN), (len(names), len(m._sm().RUNDOWN))
+
 def t_smoketest_tears_down_even_when_event_start_aborts():
     """`event start` exits non-zero when its readiness report has a FAIL — but by
     then the relay, Companion and a PUBLIC Funnel are already up. Arming the
