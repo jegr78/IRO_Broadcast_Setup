@@ -4877,6 +4877,156 @@ def t_smoketest_teardown_failure_reaches_the_verdict():
     assert (seen.get("entry") or {}).get("cleared"), "pre-run URLs not recorded"
 
 
+# --- _open_url: the browser must not inherit the frozen library path ---------
+# Same failure class as #572/#573 at a site that fix did not cover. Measured on
+# the box: under LD_LIBRARY_PATH=/tmp/_MEI… even /bin/bash dies with "undefined
+# symbol: rl_print_keybinding", so google-chrome never starts — and webbrowser
+# sends the child's stderr to devnull, so nothing says why.
+
+def t_url_opener_argv_prefers_xdg_open():
+    got = m.url_opener_argv("linux", "http://127.0.0.1:8089/",
+                            which=lambda t: "/usr/bin/" + t)
+    assert got == ["/usr/bin/xdg-open", "http://127.0.0.1:8089/"], got
+
+
+def t_url_opener_argv_gio_ends_option_parsing():
+    """gio takes the URL after an `open` verb; `--` stops option parsing there,
+    matching what CPython's own webbrowser passes."""
+    got = m.url_opener_argv("linux", "http://h/",
+                            which=lambda t: "/usr/bin/gio" if t == "gio" else None)
+    assert got == ["/usr/bin/gio", "open", "--", "http://h/"], got
+
+
+def t_url_opener_argv_macos_uses_open():
+    got = m.url_opener_argv("darwin", "http://h/", which=lambda t: "/usr/bin/" + t)
+    assert got == ["/usr/bin/open", "http://h/"], got
+
+
+def t_url_opener_argv_refuses_anything_but_http():
+    """`open`/`gio open` launch a FILE with its default application. Only ever
+    spawn them for a real http(s) URL, so a future caller handing over a path —
+    or a `-`-leading string — can never reach them."""
+    for plat in ("linux", "darwin"):
+        for bad in ("/etc/passwd", "-x", "file:///etc/passwd", "javascript:x", ""):
+            assert m.url_opener_argv(plat, bad, which=lambda t: "/usr/bin/" + t) is None, (plat, bad)
+
+
+def t_url_opener_argv_none_when_there_is_nothing_to_spawn():
+    # Windows has no library-path problem, so there is nothing to fix there.
+    assert m.url_opener_argv("win32", "http://h/", which=lambda t: "C:/x") is None
+    # A Linux box without any opener: fall back rather than invent one.
+    assert m.url_opener_argv("linux", "http://h/", which=lambda t: None) is None
+
+
+class _FakeOpenerProc:
+    """Popen stand-in for the URL opener: `rc` None = still running, else exit code."""
+
+    def __init__(self, rc):
+        self._rc = rc
+
+    def poll(self):
+        return self._rc
+
+
+def _capture_open_url(env, platform="linux", which=lambda t: "/usr/bin/" + t,
+                      rc=0, stderr_text=b"", raises=None):
+    """Run _open_url with stubbed seams. Returns (popen_calls, browser_calls, out)."""
+    popen_calls, wb_calls, out = [], [], []
+
+    def _popen(argv, **kw):
+        if raises is not None:
+            raise raises
+        popen_calls.append((argv, kw))
+        if stderr_text:
+            kw["stderr"].write(stderr_text)
+        return _FakeOpenerProc(rc)
+
+    import contextlib
+    saved_env = m.sv.external_tool_env
+    buf = io.StringIO()
+    try:
+        m.sv.external_tool_env = lambda *a, **k: env
+        with contextlib.redirect_stdout(buf):
+            m._open_url("http://127.0.0.1:8089/", which=which, platform=platform,
+                        popen=_popen, sleep=lambda _s: None, browser=wb_calls.append)
+    finally:
+        m.sv.external_tool_env = saved_env
+    out.extend(buf.getvalue().splitlines())
+    return popen_calls, wb_calls, out
+
+
+def t_open_url_hands_the_opener_a_de_pyinstaller_env():
+    clean = {"PATH": "/usr/bin"}          # what external_tool_env returns when frozen
+    popen_calls, wb_calls, _out = _capture_open_url(clean)
+    assert not wb_calls, "webbrowser.open would inherit the frozen environment"
+    assert len(popen_calls) == 1, popen_calls
+    argv, kw = popen_calls[0]
+    assert argv == ["/usr/bin/xdg-open", "http://127.0.0.1:8089/"], argv
+    assert kw["env"] is clean, kw
+    # Detached via the repo's own per-OS helper, not a hardcoded flag. Asserting
+    # the helper's OWN answer, never `start_new_session is True`: on the Windows
+    # runner that key does not exist (creationflags does), so pinning one OS's
+    # answer here goes green on macOS/Linux and red on windows-latest — the same
+    # cross-platform trap CLAUDE.md records for os.path.join.
+    for key, val in m.sv.spawn_kwargs(os.name).items():
+        assert kw.get(key) == val, (key, kw)
+    # stderr is CAPTURED, never DEVNULL — a silent linker death is what hid #572.
+    assert kw["stderr"] is not m.subprocess.DEVNULL, kw
+
+
+def t_url_opener_detaches_per_os():
+    """Both branches of the detach helper, checked from any OS — the matrix runs
+    this file on Windows too, where the POSIX answer is simply absent."""
+    assert m.sv.spawn_kwargs("posix") == {"start_new_session": True}
+    assert "creationflags" in m.sv.spawn_kwargs("nt")
+
+
+def t_open_url_treats_a_clean_exit_as_success():
+    """A URL opener HANDS OVER and exits — unlike a GUI app, being gone is the
+    normal case, so the exit CODE decides, not whether it is still running."""
+    _popen, wb_calls, _out = _capture_open_url({"PATH": "/usr/bin"}, rc=0)
+    assert not wb_calls, "a successful xdg-open must not also open a second browser"
+
+
+def t_open_url_reports_a_failing_opener_then_falls_back():
+    popen_calls, wb_calls, out = _capture_open_url(
+        {"PATH": "/usr/bin"}, rc=3, stderr_text=b"gio: no handler\nsecond line\n")
+    assert len(popen_calls) == 1
+    assert wb_calls == ["http://127.0.0.1:8089/"], wb_calls
+    joined = " | ".join(out)
+    assert "no handler" in joined, joined            # the opener's own words
+    assert "open http://127.0.0.1:8089/ yourself" in joined, joined
+
+
+def t_open_url_reports_a_bare_exit_code_when_the_opener_said_nothing():
+    _p, wb_calls, out = _capture_open_url({"PATH": "/usr/bin"}, rc=4)
+    assert wb_calls, "a non-zero exit must still fall back"
+    assert "exit 4" in " | ".join(out), out
+
+
+def t_open_url_falls_back_when_the_opener_cannot_start():
+    """Popen itself raising — the opener vanished between which() and the spawn."""
+    _p, wb_calls, out = _capture_open_url({"PATH": "/usr/bin"},
+                                          raises=OSError("No such file"))
+    assert wb_calls == ["http://127.0.0.1:8089/"], wb_calls
+    assert "No such file" in " | ".join(out), out
+
+
+def t_open_url_uses_webbrowser_off_the_frozen_build():
+    """external_tool_env() returns None when not frozen — a source run must keep
+    webbrowser's own browser discovery, unchanged."""
+    popen_calls, wb_calls, _out = _capture_open_url(None)
+    assert wb_calls == ["http://127.0.0.1:8089/"], wb_calls
+    assert not popen_calls, popen_calls
+
+
+def t_open_url_falls_back_when_there_is_no_opener():
+    popen_calls, wb_calls, _out = _capture_open_url({"PATH": "/usr/bin"},
+                                                    which=lambda t: None)
+    assert wb_calls == ["http://127.0.0.1:8089/"], wb_calls
+    assert not popen_calls, popen_calls
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
