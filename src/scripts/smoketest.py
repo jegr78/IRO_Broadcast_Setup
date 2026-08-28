@@ -269,6 +269,19 @@ def schedule_urls(rows):
     return out
 
 
+def rows_match(served, expected):
+    """True when the sheet serves EXACTLY `expected` ({physical_row: url}) in the
+    rows it names. `served` is `schedule_urls()` output.
+
+    Per row, not set inclusion: `want <= got` over all rows answered "are these
+    URLs somewhere in the tab", which a repeat run against a DEAD webhook passes
+    without anything having been written — the previous run's identical URLs are
+    still sitting there. Checking the row a value was written to, and checking
+    the cleared rows are really empty, is what makes the transition observable.
+    """
+    return all((served.get(row) or "") == (url or "") for row, url in expected.items())
+
+
 def plan_rows(youtube_urls, twitch_urls, data_rows):
     """[(physical_row, url), …] for SOURCE_PLAN, or None when a slot or a sheet
     row is missing — a short sheet must abort, never silently write fewer."""
@@ -557,18 +570,18 @@ _TWITCH_LOGIN_RE = re.compile(r"^[a-z0-9_]{1,25}$")
 # Mirrors the relay's CHANNEL_RE.
 _CHANNEL_ID_RE = re.compile(r"^UC[A-Za-z0-9_\-]{20,}$")
 
-# Deliberately duplicated from the relay's `_is_stream_url` rather than imported:
-# this module is pure stdlib and is loaded standalone (by the CLI and by the
-# tests), while the relay is a dash-named script that cannot be imported at all.
-_STREAM_HOSTS = ("youtu.be", "youtube.com", "twitch.tv")
-
 
 def stream_host(url):
     """The supported streaming host of `url`, or "" — the SSRF gate for discovery.
 
-    Mirrors the relay's `_is_stream_url` host allow-list EXACTLY, including that
-    `youtu.be` is matched only as a whole host (no subdomains) while youtube.com
-    and twitch.tv also match their subdomains. tests/test_smoketest.py pins the
+    The allow-list is deliberately duplicated from the relay's `_is_stream_url`
+    rather than imported: this module is pure stdlib and is loaded standalone (by
+    the CLI and by the tests), while the relay is a dash-named script that cannot
+    be imported at all.
+
+    Mirrors that allow-list EXACTLY, including that `youtu.be` is matched only
+    as a whole host (no subdomains) while youtube.com and twitch.tv also match
+    their subdomains. tests/test_smoketest.py pins the
     two copies against the relay's own source.
 
     Discovery hands its results to a local yt-dlp WITH the cookie jar attached

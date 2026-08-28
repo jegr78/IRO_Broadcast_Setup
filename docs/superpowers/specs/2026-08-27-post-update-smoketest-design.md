@@ -79,12 +79,24 @@ toolchain is the broadcast box, and that box holds only the two binaries, `.env`
    is_channel(url)`, so it only applies to non-empty values, and the local injection comment
    states it outright ("INCLUDING a URL clear (url=\"\")").
 
-   Clearing first makes the read-back unambiguous: seeing an old URL then proves the CSV
+   Clearing first makes the confirmation unambiguous: seeing an old URL then proves the CSV
    output is stale rather than merely suggesting it. It also removes the pre-existing hazard
    in the testing sheet where two adjacent stints carried the same URL (two feeds pulling one
-   address at handover = 429). Poll the Schedule CSV until the new URLs appear, with a
-   timeout; a timeout is a hard abort, because silently testing the previous rows is worse
-   than not testing.
+   address at handover = 429).
+
+   The sheet is polled **twice**, and both times **per row**: the cleared rows must come back
+   EMPTY before the write, and afterwards every row must carry ITS OWN url (`rows_match`). One
+   end-state check over the set of served URLs is not enough — a repeat run against a webhook
+   that has stopped writing passes it on the previous run's identical rows, without anything
+   having happened. Confirming the cleared state first is what makes the transition, rather
+   than the end state, the evidence. Either poll timing out is a hard abort, because silently
+   testing the previous rows is worse than not testing.
+
+   The webhook's own HTTP answer is never treated as proof either way: Apps Script replies
+   through a redirect whose target 404s intermittently *after* the script has already run. A
+   reported push error is therefore recorded as diagnostic detail (in the `sheet_write`
+   result, not only on stdout, so a `--json` run sees it too) and never retried — the sheet
+   decides.
 
    The sheet's `TEST` column is the operator's own scratch space and is never read by the
    relay — the smoke test does not touch it.

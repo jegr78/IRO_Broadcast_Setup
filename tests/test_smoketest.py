@@ -194,6 +194,25 @@ def t_schedule_urls_reads_the_stint_rows_only():
     assert st.schedule_urls(_HEADLESS)[1].endswith("v=a")
 
 
+def t_rows_match_is_per_row_not_set_inclusion():
+    """A dead webhook leaves the previous run's identical URLs in place. Only a
+    per-row comparison — including the rows that must now be EMPTY — notices."""
+    want = {2: "https://www.youtube.com/watch?v=a", 3: "", 5: "https://www.twitch.tv/b"}
+    assert st.rows_match(dict(want), want)
+    # Same URLs, wrong rows: the write went somewhere else.
+    swapped = {2: "https://www.twitch.tv/b", 3: "", 5: "https://www.youtube.com/watch?v=a"}
+    assert st.rows_match(swapped, want) is False
+    # A row that should have been cleared still carries the old value.
+    stale = {**want, 3: "https://www.youtube.com/watch?v=old"}
+    assert st.rows_match(stale, want) is False
+    # A row the sheet does not answer at all is not a match either.
+    assert st.rows_match({2: want[2], 3: ""}, want) is False
+    # Rows outside `expected` are none of its business.
+    assert st.rows_match({**want, 9: "https://www.twitch.tv/z"}, want)
+    # None and "" mean the same empty cell on both sides.
+    assert st.rows_match({3: None}, {3: ""})
+
+
 def t_stream_host_matches_the_relay_allow_list():
     """Drift guard: the relay's _is_stream_url is the reference. An earlier copy
     accepted *.youtu.be, which the relay rejects — exactly the drift a comment
