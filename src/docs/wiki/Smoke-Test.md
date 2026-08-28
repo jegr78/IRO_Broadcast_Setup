@@ -49,9 +49,21 @@ your installed toolchain still works.
    better and be a sim-racing stream before it is used, and at most three
    candidates per platform are probed.
 5. **Writes the URL column** of the Schedule tab's first three stint rows.
-   The rows are located the way the relay locates them (a `URL` header means
-   the data starts at physical row 2), never assumed. Streamer and Stint are
+   The rows are located the way the relay locates them, never assumed: a `URL`
+   header means the data starts at physical row 2, and only rows the relay would
+   count as a stint are eligible — a blank spacer is skipped, and without a
+   `URL` header only rows that already hold a stream. Streamer and Stint are
    left untouched, so a foreign stream shows up under your usual names.
+
+   > **What it costs you.** The URL cells are **cleared and not restored** —
+   > four rows are emptied while three are rewritten, so the fourth row's URL is
+   > gone for good. The run prints the previous values and records them in
+   > `smoketest-history.jsonl`; that file is the only copy. Use a dedicated
+   > testing league, never the one you are about to broadcast.
+   >
+   > A tab **without** a `URL` header whose streams are not in column A is
+   > refused before anything is written: the Sheet webhook can only address
+   > column A there, so writing would blank whatever else lives in it.
 6. Starts a normal event titled `Smoketest <date>` — Tailscale, Discord, relay,
    OBS, Companion, scene collection, Standby, page refresh. Nothing is skipped.
 7. Runs the **director rundown** and reads OBS back after every step:
@@ -145,6 +157,19 @@ scene collection by name.
 
 Both installs can never run at once: the relay binds port 8088 as a machine
 singleton, and the smoke test refuses to start while a relay is up.
+
+## What the run leaves behind
+
+The discovered URLs stay in the Schedule tab — clearing them again is a manual
+step, by design, so you can look at what ran. Everything else is put back: the
+relay and Companion are stopped, and a Tailscale Funnel that **this run** opened
+is closed again (one that was already open before is left alone). A failing
+teardown is a `FAIL` check, not a footnote, so a run can never report `PASS`
+while the relay is still pulling.
+
+Each run also posts the usual post-event report to the league's Discord, with
+the session logs attached. Pass `--no-report` to keep smoke runs off that
+channel.
 
 ## See also
 

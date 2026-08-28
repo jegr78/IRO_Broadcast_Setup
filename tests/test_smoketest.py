@@ -140,28 +140,86 @@ def t_rank_twitch_candidates():
 
 _HEADED = [["URL", "Streamer", "Stint"],
            ["https://www.youtube.com/watch?v=a", "JeGr", "Stint 1"],
-           ["", "Bracing1", "Stint 2"],
-           ["https://www.twitch.tv/b", "Kruentis", "Stint 3"]]
+           ["", "Second Commentator", "Stint 2"],          # planned, URL not filled in
+           ["", "", ""],                                    # blank spacer
+           ["https://www.twitch.tv/b", "Third Commentator", "Stint 3"]]
 _HEADLESS = [["https://www.youtube.com/watch?v=a", "JeGr"],
-             ["https://www.twitch.tv/b", "Kruentis"]]
+             ["https://www.twitch.tv/b", "Third Commentator"]]
 
 
-def t_schedule_data_rows_skips_a_header():
+def t_schedule_data_rows_mirrors_what_the_relay_calls_a_stint():
     """Physical, 1-based, header included — the relay keys /schedule/data the
     same way ("keyed by physical sheet row"). Assuming data starts at row 1
-    overwrote the live sheet's `URL` header and knocked the tab out of header
-    mode; the run then never read its own writes back."""
-    assert st.schedule_data_rows(_HEADED) == [2, 3, 4]
+    overwrote a live sheet's `URL` header and knocked the tab out of header mode.
+    """
+    # Row 3 is a planned stint (name + label, URL still blank) and counts; row 4
+    # is a blank spacer and does NOT — writing there invents a stint.
+    assert st.schedule_data_rows(_HEADED) == [2, 3, 5]
     assert st.schedule_data_rows(_HEADLESS) == [1, 2]
     assert st.schedule_data_rows([]) == []
     assert st.schedule_data_rows([["URL", "Streamer"]]) == []
 
 
-def t_schedule_urls_reads_the_data_rows_only():
+def t_headless_tab_never_targets_a_foreign_header():
+    """Without a recognized `URL` header only URL-bearing rows count, so a tab
+    headed `Link | Streamer` keeps its header instead of being written over."""
+    rows = [["Link", "Streamer"],
+            ["https://www.youtube.com/watch?v=a", "JeGr"]]
+    assert st.schedule_data_rows(rows) == [2]
+
+
+def t_uc_channel_ids_count_as_stints():
+    """`UC…` is a documented Schedule value (Sheet-Template); the relay's
+    is_channel accepts it. Only matching stream URLs made such a tab look empty."""
+    rows = [["UC" + "a" * 22, "JeGr"], ["UC" + "b" * 22, "Second Commentator"]]
+    assert st.schedule_data_rows(rows) == [1, 2]
+
+
+def t_writable_layout_refuses_what_the_webhook_cannot_address():
+    """The Apps Script writes `colOf('url') || 1` — without a `URL` header that
+    is ALWAYS column A. Detecting column B and writing A would blank real data."""
+    assert st.writable_layout_note(_HEADED) == ""
+    assert st.writable_layout_note(_HEADLESS) == ""            # URLs are in A
+    shifted = [["Team", "https://www.youtube.com/watch?v=a"],
+               ["Team2", "https://www.twitch.tv/b"]]
+    note = st.writable_layout_note(shifted)
+    assert "column A" in note and "URL" in note, note
+    assert "no URL column" in st.writable_layout_note([["a"], ["b"]])
+
+
+def t_schedule_urls_reads_the_stint_rows_only():
     got = st.schedule_urls(_HEADED)
     assert got == {2: "https://www.youtube.com/watch?v=a", 3: "",
-                   4: "https://www.twitch.tv/b"}
+                   5: "https://www.twitch.tv/b"}
     assert st.schedule_urls(_HEADLESS)[1].endswith("v=a")
+
+
+def t_stream_host_matches_the_relay_allow_list():
+    """Drift guard: the relay's _is_stream_url is the reference. An earlier copy
+    accepted *.youtu.be, which the relay rejects — exactly the drift a comment
+    claimed was pinned while no such test existed."""
+    with open(os.path.join(ROOT, "src", "relay", "racecast-feeds.py"),
+              encoding="utf-8") as fh:
+        src = fh.read()
+    assert 'host == "youtu.be"' in src, "the relay's host rules moved"
+    assert 'host.endswith(".youtube.com")' in src
+    assert 'host.endswith(".twitch.tv")' in src
+    assert ".youtu.be" not in src.split("def is_channel")[0].split("_is_stream_url")[-1]
+    assert st.stream_host("https://youtu.be/x") == "youtu.be"
+    assert st.stream_host("https://evil.youtu.be/x") == ""     # relay rejects it too
+    assert st.stream_host("https://www.youtube.com/watch?v=a") == "youtube.com"
+    assert st.stream_host("https://m.twitch.tv/a") == "twitch.tv"
+
+
+def t_channel_id_regex_matches_the_relay():
+    """The UC-id shape is the relay's CHANNEL_RE, read out of its source."""
+    with open(os.path.join(ROOT, "src", "relay", "racecast-feeds.py"),
+              encoding="utf-8") as fh:
+        m = re.search(r"CHANNEL_RE = re\.compile\(r\"([^\"]+)\"\)", fh.read())
+    assert m, "the relay's CHANNEL_RE moved — re-point this guard"
+    relay_re = re.compile(m.group(1))
+    for value in ("UC" + "a" * 20, "UC" + "b" * 30, "UCshort", "", "not-a-channel"):
+        assert bool(relay_re.match(value)) == bool(st._CHANNEL_ID_RE.match(value)), value
 
 
 def t_source_plan_is_yt_twitch_yt():

@@ -177,42 +177,93 @@ SOURCE_PLAN = ("youtube", "twitch", "youtube")
 SCHEDULE_URL_HEADERS = ("url",)
 
 
-def schedule_layout(rows):
-    """(url_column, first_data_row) for a Schedule tab parsed by csv.reader.
+SCHEDULE_STREAMER_HEADERS = ("streamer", "name")
+SCHEDULE_STINT_HEADERS = ("stint",)
 
-    Header mode when row 1 carries a recognized `URL` header — data then starts
-    at physical row 2. Otherwise the URL column is the one holding the most
-    stream URLs and the data starts at row 1.
+
+def _header_index(header, names):
+    return next((header.index(h) for h in names if h in header), None)
+
+
+def schedule_layout(rows):
+    """(url_col, first_data_row, header_mode) for a Schedule tab.
+
+    Mirrors the relay's `_parse_rows`: header mode when row 1 carries a
+    recognized `URL` header (data from physical row 2), otherwise the URL column
+    is the one holding the most channel values and the data starts at row 1.
     """
     if not rows:
-        return None, 0
+        return None, 0, False
     header = [(c or "").strip().lower() for c in rows[0]]
-    for name in SCHEDULE_URL_HEADERS:
-        if name in header:
-            return header.index(name), 2
+    url_i = _header_index(header, SCHEDULE_URL_HEADERS)
+    if url_i is not None:
+        return url_i, 2, True
     best_col, best_cnt = None, 0
     for col in range(max((len(r) for r in rows), default=0)):
-        cnt = sum(1 for r in rows if len(r) > col and stream_host(r[col].strip()))
+        cnt = sum(1 for r in rows if len(r) > col and is_channel_value(r[col]))
         if cnt > best_cnt:
             best_col, best_cnt = col, cnt
-    return (best_col, 1) if best_col is not None else (None, 0)
+    return (best_col, 1, False) if best_col is not None else (None, 0, False)
+
+
+def writable_layout_note(rows):
+    """"" when this tab can be written safely, else the reason it cannot.
+
+    The Apps Script writes `colOf('url') || 1` — with a `URL` header it writes
+    that header's column, WITHOUT one it always writes column A. Our positional
+    detection can land on a different column, and reading one column while
+    writing another would blank real data in A. Refuse before anything is
+    written rather than discover it from a read-back that never matches.
+    """
+    col, _first, header = schedule_layout(rows)
+    if col is None:
+        return "no URL column found in the Schedule tab"
+    if not header and col != 0:
+        return ("the Schedule tab has no `URL` header and its stream column is "
+                f"{chr(ord('A') + col)}, but the webhook can only write column A "
+                "— add a `URL` header row (wiki: Sheet-Template)")
+    return ""
 
 
 def schedule_data_rows(rows):
-    """Physical row numbers of the Schedule tab's data rows (header excluded)."""
-    col, first = schedule_layout(rows)
+    """Physical rows the RELAY counts as stints — the only ones safe to write.
+
+    Mirrors `_parse_rows`. In header mode a row counts when it has a channel URL
+    OR a Streamer OR a Stint label (a planned stint whose URL is not filled in
+    yet); a fully blank spacer does not — writing into one would invent a stint
+    the league never planned. In positional mode only URL-bearing rows count, so
+    a differently-named header row can never be targeted and overwritten.
+    """
+    col, first, header = schedule_layout(rows)
     if col is None:
         return []
-    return list(range(first, len(rows) + 1))
+    if not header:
+        return [i for i in range(first, len(rows) + 1)
+                if len(rows[i - 1]) > col and is_channel_value(rows[i - 1][col])]
+    head = [(c or "").strip().lower() for c in rows[0]]
+    name_i = _header_index(head, SCHEDULE_STREAMER_HEADERS)
+    stint_i = _header_index(head, SCHEDULE_STINT_HEADERS)
+
+    def _cell(r, i):
+        return r[i].strip() if i is not None and len(r) > i else ""
+
+    out = []
+    for line in range(first, len(rows) + 1):
+        r = rows[line - 1]
+        if is_channel_value(_cell(r, col)):
+            out.append(line)
+        elif _cell(r, name_i) or _cell(r, stint_i):
+            out.append(line)          # planned stint, URL not yet provided
+    return out
 
 
 def schedule_urls(rows):
-    """{physical_row: url} for the data rows, in the located URL column."""
-    col, first = schedule_layout(rows)
+    """{physical_row: url} for the stint rows, in the located URL column."""
+    col, _first, _header = schedule_layout(rows)
     if col is None:
         return {}
     out = {}
-    for line in range(first, len(rows) + 1):
+    for line in schedule_data_rows(rows):
         r = rows[line - 1]
         out[line] = r[col].strip() if len(r) > col else ""
     return out
@@ -503,23 +554,28 @@ class Result:
 
 
 _TWITCH_LOGIN_RE = re.compile(r"^[a-z0-9_]{1,25}$")
+# Mirrors the relay's CHANNEL_RE.
+_CHANNEL_ID_RE = re.compile(r"^UC[A-Za-z0-9_\-]{20,}$")
 
 # Deliberately duplicated from the relay's `_is_stream_url` rather than imported:
 # this module is pure stdlib and is loaded standalone (by the CLI and by the
 # tests), while the relay is a dash-named script that cannot be imported at all.
-# tests/test_smoketest.py pins both copies against the same vectors.
 _STREAM_HOSTS = ("youtu.be", "youtube.com", "twitch.tv")
 
 
 def stream_host(url):
     """The supported streaming host of `url`, or "" — the SSRF gate for discovery.
 
-    Mirrors the relay's `_is_stream_url` host allow-list. Discovery hands its
-    results to a local yt-dlp WITH the cookie jar attached and writes them into
-    the league sheet through the webhook, which bypasses `schedule_set`'s own
-    `is_channel` check — so the allow-list has to be applied here too. Parsing
-    the hostname (rather than testing a substring) is what makes
-    `https://evil.example/twitch.tv` fail.
+    Mirrors the relay's `_is_stream_url` host allow-list EXACTLY, including that
+    `youtu.be` is matched only as a whole host (no subdomains) while youtube.com
+    and twitch.tv also match their subdomains. tests/test_smoketest.py pins the
+    two copies against the relay's own source.
+
+    Discovery hands its results to a local yt-dlp WITH the cookie jar attached
+    and writes them into the league sheet through the webhook, which bypasses
+    `schedule_set`'s own `is_channel` check — so the allow-list has to be applied
+    here too. Parsing the hostname (rather than testing a substring) is what
+    makes `https://evil.example/twitch.tv` fail.
     """
     try:
         p = urlparse(url or "")
@@ -528,10 +584,20 @@ def stream_host(url):
     if p.scheme not in ("http", "https"):
         return ""
     host = (p.hostname or "").lower()
-    for known in _STREAM_HOSTS:
+    if host == "youtu.be":
+        return "youtu.be"
+    for known in ("youtube.com", "twitch.tv"):
         if host == known or host.endswith("." + known):
             return known
     return ""
+
+
+def is_channel_value(value):
+    """What the relay accepts in a Schedule URL cell: a stream URL or a bare
+    `UC…` id. Mirrors its `is_channel`; using only `stream_host` here made a
+    documented UC-id layout look like an empty schedule."""
+    v = (value or "").strip()
+    return bool(_CHANNEL_ID_RE.match(v)) or bool(stream_host(v))
 
 
 def platform_of(url):
@@ -634,16 +700,23 @@ def exit_code(verdict):
 
 # ----------------------------------------------------------------- history
 
-def history_entry(ts, verdict, tools, sources, minutes, results):
+def history_entry(ts, verdict, tools, sources, minutes, results, cleared=None):
     """One JSONL line per run, mirroring runtime/speedtest-history.jsonl, so
     comparing a red run against the last green one is a `tail -2` instead of a
-    feeling."""
+    feeling.
+
+    `cleared` carries the URL cells as they were BEFORE the run emptied them.
+    The run does not restore them (the rows are meant to stay), so this file is
+    the only record of what was there — including the row that gets cleared but
+    never rewritten.
+    """
     return {
         "ts": ts,
         "verdict": verdict,
         "minutes": minutes,
         "tools": dict(tools or {}),
         "sources": [dict(s) for s in (sources or ())],
+        "cleared": {str(k): v for k, v in (cleared or {}).items()},
         "checks": [{"name": r.name, "severity": r.severity, "note": r.note}
                    for r in (results or ())],
     }

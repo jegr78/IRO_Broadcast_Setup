@@ -4544,6 +4544,65 @@ def t_smoketest_tears_down_even_when_event_start_aborts():
     assert "exit1" in calls, calls
 
 
+def t_smoketest_teardown_failure_reaches_the_verdict():
+    """A failing `event stop` used to be a say() note only — suppressed entirely
+    under --json — so a run could print PASS, exit 0 and leave the relay pulling
+    two strangers' streams. It has to become a check."""
+    seen = {}
+    saved = {name: getattr(m, name) for name in
+             ("_active_profile_name", "_relay_is_alive", "_smoke_confirm",
+              "_smoke_fingerprint", "_smoke_vocab", "_smoke_discover",
+              "_smoke_js_runtime", "_smoke_schedule_rows", "_smoke_write_schedule",
+              "_smoke_append_history", "event_start", "event_stop",
+              "_smoke_rundown", "_smoke_observe")}
+    saved_env = {k: os.environ.get(k) for k in
+                 ("RACECAST_SHEET_ID", "RACECAST_SHEET_PUSH_URL")}
+    os.environ["RACECAST_SHEET_ID"] = "sheet"
+    os.environ["RACECAST_SHEET_PUSH_URL"] = "https://example.invalid/w"
+    m._active_profile_name = lambda *a, **k: "testing"
+    m._relay_is_alive = lambda *a, **k: False
+    m._smoke_confirm = lambda *a, **k: None
+    m._smoke_fingerprint = lambda: {"yt-dlp": "1", "js_runtime": "unknown"}
+    m._smoke_vocab = lambda sheet_id: (["q"], ["c"])
+    m._smoke_discover = lambda *a, **k: (["https://www.youtube.com/watch?v=1",
+                                          "https://www.youtube.com/watch?v=2"],
+                                         ["https://www.twitch.tv/x"], [])
+    m._smoke_js_runtime = lambda url: "deno-x"
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"],
+                                               ["https://www.youtube.com/watch?v=o", "A"],
+                                               ["https://www.twitch.tv/o", "B"],
+                                               ["https://youtu.be/o", "C"]]
+    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_append_history = lambda entry: seen.update(entry=entry)
+    m.event_start = lambda rest: None
+    m._smoke_rundown = lambda say: []
+    m._smoke_observe = lambda minutes, say: []
+
+    def _stop_boom(rest):
+        raise SystemExit("relay stop failed")
+
+    m.event_stop = _stop_boom
+    code = None
+    try:
+        try:
+            m.smoketest_cmd(["--json", "--minutes", "1"])
+        except SystemExit as exc:
+            code = exc.code
+    finally:
+        for name, fn in saved.items():
+            setattr(m, name, fn)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    names = [c["name"] for c in (seen.get("entry") or {}).get("checks", [])]
+    assert "teardown" in names, names
+    assert code == 1, code
+    # The URLs the run blanked are recorded — nothing restores them.
+    assert (seen.get("entry") or {}).get("cleared"), "pre-run URLs not recorded"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):

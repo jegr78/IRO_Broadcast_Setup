@@ -32,7 +32,7 @@
   racecast freeport [PORT...] [--force]       # free a stuck feed port (default 53001-53003); kills orphaned holders, refuses a running relay/streams
   racecast device-scan [--webcam VAL] [--capture VAL] [--mic VAL]  # enumerate OBS video-capture devices + microphones and save the pick(s) to .env (interactive when no flags given)
   racecast gt7-discover [--save] [--print] [--timeout N] [--pick I]  # find the PS4/PS5 running GT7 and save its IP
-  racecast smoketest [--minutes N] [--json] [--force]   # post-update check: real event + director rundown against discovered live streams
+  racecast smoketest [--minutes N] [--json] [--force] [--no-report]   # post-update check: real event + director rundown against discovered live streams
   racecast preflight | speedtest [--json] | cookies [twitch] [browser] | graphics | media | brands | setup [--out PATH] | install-tools [--yes] [--update] | install-apps [--yes] [--update]
   racecast obs-browser [--yes]               # Linux/ARM64: build & install OBS's Browser Source plugin from source (needed for the relay HUD)
   racecast export companion [--out PATH]     # write the Companion button config
@@ -6971,7 +6971,7 @@ def _smoke_discover(cookies, queries, categories, say):
             # is not available" (the bot check hiding the formats) reads as "not
             # live" otherwise, and that cost a full diagnosis cycle on the box.
             say(f"  youtube {cand['title'][:44]!r}: "
-                + (f"accepted ({height}p)" if ok else f"rejected — {note or why}"))
+                + (f"accepted ({height}p)" if ok else f"rejected — {(note or why)!r}"))
             if ok:
                 yt_urls.append(cand["url"])
     tw_urls, attempts = [], 0
@@ -6985,8 +6985,8 @@ def _smoke_discover(cookies, queries, categories, say):
         plugin, qualities, category, note = _smoke_twitch_probe(cand["login"])
         ok, why = sm.accept_twitch(plugin, qualities, category)
         say(f"  twitch {cand['login']!r}: "
-            + (f"accepted ({sm.ladder_max_height(qualities)}p, {category})"
-               if ok else f"rejected — {note or why}"))
+            + (f"accepted ({sm.ladder_max_height(qualities)}p, {category!r})"
+               if ok else f"rejected — {(note or why)!r}"))
         if ok:
             url = f"https://www.twitch.tv/{cand['login']}"
             if sm.stream_host(url):
@@ -7250,11 +7250,14 @@ def _smoke_minutes(rest):
         return sm.DEFAULT_MINUTES
     i = rest.index("--minutes")
     if i + 1 >= len(rest):
-        sys.exit("racecast: --minutes requires an integer value")
+        raise SystemExit("racecast: --minutes requires an integer value")
     try:
         return max(1, min(120, int(rest[i + 1])))
     except ValueError:
-        sys.exit(f"racecast: --minutes must be an integer, got {rest[i + 1]!r}")
+        # `raise` rather than sys.exit(): identical behaviour, but it makes the
+        # path explicitly terminating (CodeQL py/mixed-returns).
+        raise SystemExit(
+            f"racecast: --minutes must be an integer, got {rest[i + 1]!r}") from None
 
 
 def _smoke_confirm(profile, rest):
@@ -7264,10 +7267,14 @@ def _smoke_confirm(profile, rest):
     ceremony."""
     sm = _sm()
     phrase = sm.confirm_phrase(profile)
+    # stderr, not stdout: --json advertises machine-readable output and a prompt
+    # in the middle of it is not parseable.
     print(f"\nThis CLEARS the URL column of the '{profile}' Schedule tab and "
-          f"overwrites its first stint rows.\nType exactly:  {phrase}")
+          f"overwrites its first stint rows.\nType exactly:  {phrase}",
+          file=sys.stderr)
     try:
-        typed = input("> ")
+        print("> ", end="", flush=True, file=sys.stderr)
+        typed = input()
     except (EOFError, KeyboardInterrupt):
         typed = ""
     if not sm.phrase_ok(profile, typed):
@@ -7315,6 +7322,12 @@ def smoketest_cmd(rest):
                  "(this would pull streams and switch OBS). Use --force if you "
                  "are sure nothing is on air.")
     _smoke_confirm(profile, rest)
+    # The confirmation blocks on input() for an unbounded time. Re-check before
+    # the destructive write: a broadcast that started in the meantime must not
+    # have its schedule cleared.
+    if "--force" not in rest and _relay_is_alive():
+        sys.exit("racecast: a relay came up while the confirmation was pending "
+                 "— refusing to touch the schedule.")
 
     results = []
     say(f"\nSmoke test — profile '{profile}', {minutes} min observation\n")
@@ -7348,7 +7361,8 @@ def smoketest_cmd(rest):
     # tab with a `URL` header starts its data at physical row 2, and writing to
     # row 1 overwrites that header (which also drops the tab out of header mode).
     try:
-        data_rows = sm.schedule_data_rows(_smoke_schedule_rows(sheet_id))
+        schedule_rows = _smoke_schedule_rows(sheet_id)
+        data_rows = sm.schedule_data_rows(schedule_rows)
     except Exception as exc:                     # noqa: BLE001 — reported as a check
         results.append(sm.Result("sheet_layout", sm.FAIL, str(exc)[:160]))
         return _smoke_finish(results, tools, [], minutes, as_json, lines)
@@ -7371,15 +7385,37 @@ def smoketest_cmd(rest):
                              ", ".join(f"row {s['row']}: {s['platform']}" for s in sources)))
 
     say("\nSheet")
-    ok, note = _smoke_write_schedule(push_url, sheet_id, rows,
-                                     sm.clear_rows(data_rows), say)
+    # The webhook writes `colOf('url') || 1`: with a `URL` header its column,
+    # WITHOUT one always column A. A tab whose stream column is elsewhere would
+    # get column A blanked — real data — while the read-back watches the other
+    # column and never matches. Refuse before anything is written.
+    layout_note = sm.writable_layout_note(schedule_rows)
+    if layout_note:
+        results.append(sm.Result("sheet_layout", sm.FAIL, layout_note))
+        return _smoke_finish(results, tools, [], minutes, as_json, lines)
+    clearing = sm.clear_rows(data_rows)
+    # The rows are meant to STAY after a run, so nothing is restored — but the
+    # cleared cells are gone for good (one row is cleared and never rewritten).
+    # Print them and put them in the history so a manual restore is possible.
+    served = sm.schedule_urls(schedule_rows)
+    cleared = {r: served.get(r, "") for r in clearing if served.get(r)}
+    if cleared:
+        say("  previous URLs (kept only in the history file):")
+        for row in sorted(cleared):
+            say(f"    row {row}: {cleared[row]}")
+    ok, note = _smoke_write_schedule(push_url, sheet_id, rows, clearing, say)
     if not ok:
         results.append(sm.Result("sheet_write", sm.FAIL, note))
-        return _smoke_finish(results, tools, sources, minutes, as_json, lines)
+        return _smoke_finish(results, tools, sources, minutes, as_json, lines, cleared)
     results.append(sm.Result("sheet_write", sm.PASS,
                              "URL column only, rows "
                              + ", ".join(str(r) for r, _u in rows)))
 
+    try:
+        import tailscale as _ts
+        funnel_was_off = not _ts.funnel_on()
+    except Exception:                            # noqa: BLE001 — best effort
+        funnel_was_off = False
     title = "Smoketest " + time.strftime("%Y-%m-%d %H:%M")
     say(f"\nEvent — starting as {title!r}")
     # The teardown below is UNCONDITIONAL: `event start` brings services up one by
@@ -7406,21 +7442,36 @@ def smoketest_cmd(rest):
         # switched OBS behind.
         say("\nEvent — stopping")
         try:
-            event_stop([])
-        except BaseException as exc:             # noqa: BLE001 — incl. SystemExit
-            # The run is substantively finished here; letting a teardown exit
-            # propagate would drop the verdict, the history line AND the exit
-            # code, which is the one thing the operator came for.
-            say(f"  teardown note: {exc}")
-    return _smoke_finish(results, tools, sources, minutes, as_json, lines)
+            event_stop(["--no-report"] if "--no-report" in rest else [])
+        except (Exception, SystemExit) as exc:   # noqa: BLE001 — SystemExit incl.
+            # A teardown failure has to reach the VERDICT, not just the console:
+            # say() is suppressed under --json, so reporting it there alone let a
+            # run print PASS and exit 0 with the relay still pulling streams.
+            # KeyboardInterrupt is deliberately NOT caught — Ctrl+C during a
+            # hung teardown must abort, not turn into a note.
+            results.append(sm.Result("teardown", sm.FAIL, str(exc)[:160]
+                                     or "event stop failed"))
+            say(f"  teardown FAILED: {exc}")
+        # `event start` turns the Funnel on by default, and no stop path turns it
+        # off — a maintenance command must not leave public ingress behind that
+        # it opened itself. Only revert what THIS run switched on.
+        if funnel_was_off:
+            try:
+                import tailscale as _ts
+                if _ts.funnel_on():
+                    funnel_cmd(["off"])
+                    say("  funnel closed again (this run had opened it)")
+            except (Exception, SystemExit) as exc:   # noqa: BLE001 — best effort
+                say(f"  funnel note: {exc}")
+    return _smoke_finish(results, tools, sources, minutes, as_json, lines, cleared)
 
 
-def _smoke_finish(results, tools, sources, minutes, as_json, lines):
+def _smoke_finish(results, tools, sources, minutes, as_json, lines, cleared=None):
     """Render the verdict, append the history line, return the exit code."""
     sm = _sm()
     summary = sm.summarize(results)
     entry = sm.history_entry(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), summary["verdict"], tools, sources,
-                             minutes, results)
+                             minutes, results, cleared=cleared)
     _smoke_append_history(entry)
     if as_json:
         print(json.dumps({**entry, "counts": summary["counts"]}, ensure_ascii=False))
