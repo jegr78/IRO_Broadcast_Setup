@@ -6995,7 +6995,12 @@ def _smoke_discover(cookies, queries, categories, say):
 
 
 def _smoke_push(push_url, row, url):
-    """One `schedule` webhook write. Column A ONLY — Streamer and Stint are never
+    """One `schedule` webhook write. Its HTTP result is a WEAK signal: Apps
+    Script answers through a redirect whose target 404s intermittently AFTER the
+    script has already run — observed on the box with the URL sitting in the
+    sheet afterwards. So callers must not treat a reported failure as proof that
+    nothing was written; `_smoke_write_schedule` reads the sheet back instead.
+    Column A ONLY — Streamer and Stint are never
     sent, mirroring the panel's CLEAR URL button ("keep Streamer + Stint so the
     slot survives"). Those fields are vocabulary-constrained against the
     Configuration tab, so a discovered channel name is not a legal value there."""
@@ -7028,14 +7033,21 @@ def _smoke_write_schedule(push_url, sheet_id, rows, clear, say):
     CSV then still shows an OLD url, which is unambiguous. A timeout is a hard
     abort — silently testing the previous rows is worse than not testing."""
     sm = _sm()
+    push_notes = []
     for row in clear:
         ok, note = _smoke_push(push_url, row, "")
         if not ok:
-            return False, f"clearing row {row} failed: {note}"
+            # NOT fatal, and deliberately not retried: the webhook's HTTP result
+            # does not tell us whether the write happened. Clearing only exists
+            # to make the read-back unambiguous, and the read-back is what
+            # decides. A reported error is kept as diagnostic detail.
+            push_notes.append(f"clear row {row}: {note}")
+            say(f"  clearing row {row} reported {note} — the read-back decides")
     for row, url in rows:
         ok, note = _smoke_push(push_url, row, url)
         if not ok:
-            return False, f"writing row {row} failed: {note}"
+            push_notes.append(f"write row {row}: {note}")
+            say(f"  write of row {row} reported {note} — the read-back decides")
     want = {url for _row, url in rows}
     deadline = time.time() + SMOKE_READBACK_S
     while time.time() < deadline:
@@ -7045,11 +7057,13 @@ def _smoke_write_schedule(push_url, sheet_id, rows, clear, say):
         except Exception:                        # noqa: BLE001 — transient, keep polling
             got = set()
         if want <= got:
-            say("  schedule read back OK")
+            say("  schedule read back OK"
+                + (" (a write had reported an error)" if push_notes else ""))
             return True, ""
         time.sleep(5)
     return False, (f"the sheet still does not serve the new URLs after "
-                   f"{SMOKE_READBACK_S}s — refusing to test the previous rows")
+                   f"{SMOKE_READBACK_S}s — refusing to test the previous rows"
+                   + (f" ({'; '.join(push_notes)})" if push_notes else ""))
 
 
 def _smoke_error_payload(exc):

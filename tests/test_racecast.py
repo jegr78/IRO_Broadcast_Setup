@@ -4401,6 +4401,47 @@ def t_smoke_push_reports_a_rejected_write():
     assert not ok
 
 
+def t_smoke_write_schedule_lets_the_readback_overrule_a_failed_write():
+    """The webhook's HTTP result does not tell us whether the write happened:
+    observed on the box, the client got `HTTP Error 404` from Apps Script's
+    redirect target while the URL was already in the sheet. So a reported write
+    error must not abort the run — and it is deliberately NOT retried either.
+    The sheet read-back is the only thing that knows."""
+    saved = {n: getattr(m, n) for n in ("_smoke_push", "_smoke_schedule_rows")}
+    said = []
+    m._smoke_push = lambda url, row, value: (False, "HTTP Error 404: Not Found")
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"],
+                                               ["https://www.youtube.com/watch?v=1", "A"]]
+    try:
+        ok, note = m._smoke_write_schedule("https://example.invalid/w", "sheet",
+                                           [(2, "https://www.youtube.com/watch?v=1")],
+                                           [2], said.append)
+    finally:
+        for n, fn in saved.items():
+            setattr(m, n, fn)
+    assert ok, note
+    assert any("read back OK" in line for line in said), said
+
+
+def t_smoke_write_schedule_names_the_write_errors_when_it_times_out():
+    """A read-back that never matches must say what the writes reported, so the
+    operator is not left guessing whether anything reached the sheet."""
+    saved = {n: getattr(m, n) for n in ("_smoke_push", "_smoke_schedule_rows",
+                                        "SMOKE_READBACK_S")}
+    m._smoke_push = lambda url, row, value: (False, "HTTP Error 500: boom")
+    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"], ["", "A"]]
+    m.SMOKE_READBACK_S = 0
+    try:
+        ok, note = m._smoke_write_schedule("https://example.invalid/w", "sheet",
+                                           [(2, "https://www.youtube.com/watch?v=1")],
+                                           [2], lambda _m: None)
+    finally:
+        for n, fn in saved.items():
+            setattr(m, n, fn)
+    assert not ok
+    assert "500" in note and "write row 2" in note, note
+
+
 def t_smoke_relay_post_returns_a_parsed_reply():
     stub = _StubHttp(post=b'{"scene": "Standby", "muted": {}}')
     got = _with_stub_http(stub, lambda: m._smoke_relay_post("obs/state", {}))
