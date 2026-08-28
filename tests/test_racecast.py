@@ -4562,8 +4562,8 @@ def t_smoke_write_schedule_fails_when_nothing_changed():
     webhook wants the URLs the previous run already wrote, so an end-state check
     passes while nothing was written. Confirming the CLEAR first closes it."""
     unchanged = [["URL", "Streamer"], ["https://www.youtube.com/watch?v=1", "A"]]
-    (ok, note, _notes), _said = _write_schedule(
-        lambda u, r, v: (False, "HTTP 404"), [unchanged])
+    ok, note, _notes = _write_schedule(
+        lambda u, r, v: (False, "HTTP 404"), [unchanged])[0]
     assert not ok
     assert "cleared" in note and "HTTP 404" in note, note
 
@@ -4572,9 +4572,9 @@ def t_smoke_write_schedule_fails_when_a_url_lands_in_the_wrong_row():
     """Per row, not set inclusion: the right URL in the wrong row is not a pass."""
     sheets = [[["URL", "S"], ["", "A"], ["", "B"]],
               [["URL", "S"], ["", "A"], ["https://www.youtube.com/watch?v=1", "B"]]]
-    (ok, note, _n), _said = _write_schedule(lambda u, r, v: (True, ""), sheets,
-                                            clear=(2, 3),
-                                            rows=[(2, "https://www.youtube.com/watch?v=1")])
+    ok, note, _n = _write_schedule(lambda u, r, v: (True, ""), sheets,
+                                   clear=(2, 3),
+                                   rows=[(2, "https://www.youtube.com/watch?v=1")])[0]
     assert not ok and "written" in note, note
 
 
