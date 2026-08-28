@@ -4963,10 +4963,22 @@ def t_open_url_hands_the_opener_a_de_pyinstaller_env():
     argv, kw = popen_calls[0]
     assert argv == ["/usr/bin/xdg-open", "http://127.0.0.1:8089/"], argv
     assert kw["env"] is clean, kw
-    # Detached via the repo's own per-OS helper, not a hardcoded flag.
-    assert kw.get("start_new_session") is True, kw
+    # Detached via the repo's own per-OS helper, not a hardcoded flag. Asserting
+    # the helper's OWN answer, never `start_new_session is True`: on the Windows
+    # runner that key does not exist (creationflags does), so pinning one OS's
+    # answer here goes green on macOS/Linux and red on windows-latest — the same
+    # cross-platform trap CLAUDE.md records for os.path.join.
+    for key, val in m.sv.spawn_kwargs(os.name).items():
+        assert kw.get(key) == val, (key, kw)
     # stderr is CAPTURED, never DEVNULL — a silent linker death is what hid #572.
     assert kw["stderr"] is not m.subprocess.DEVNULL, kw
+
+
+def t_url_opener_detaches_per_os():
+    """Both branches of the detach helper, checked from any OS — the matrix runs
+    this file on Windows too, where the POSIX answer is simply absent."""
+    assert m.sv.spawn_kwargs("posix") == {"start_new_session": True}
+    assert "creationflags" in m.sv.spawn_kwargs("nt")
 
 
 def t_open_url_treats_a_clean_exit_as_success():
