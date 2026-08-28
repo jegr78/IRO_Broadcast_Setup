@@ -4401,45 +4401,88 @@ def t_smoke_push_reports_a_rejected_write():
     assert not ok
 
 
-def t_smoke_write_schedule_lets_the_readback_overrule_a_failed_write():
-    """The webhook's HTTP result does not tell us whether the write happened:
-    observed on the box, the client got `HTTP Error 404` from Apps Script's
-    redirect target while the URL was already in the sheet. So a reported write
-    error must not abort the run — and it is deliberately NOT retried either.
-    The sheet read-back is the only thing that knows."""
-    saved = {n: getattr(m, n) for n in ("_smoke_push", "_smoke_schedule_rows")}
-    said = []
-    m._smoke_push = lambda url, row, value: (False, "HTTP Error 404: Not Found")
-    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"],
-                                               ["https://www.youtube.com/watch?v=1", "A"]]
-    try:
-        ok, note = m._smoke_write_schedule("https://example.invalid/w", "sheet",
-                                           [(2, "https://www.youtube.com/watch?v=1")],
-                                           [2], said.append)
-    finally:
-        for n, fn in saved.items():
-            setattr(m, n, fn)
-    assert ok, note
-    assert any("read back OK" in line for line in said), said
-
-
-def t_smoke_write_schedule_names_the_write_errors_when_it_times_out():
-    """A read-back that never matches must say what the writes reported, so the
-    operator is not left guessing whether anything reached the sheet."""
+def _write_schedule(pushes, sheets, clear=(2,), rows=None):
+    """Drive _smoke_write_schedule with a scripted sheet: `sheets` is the list of
+    CSV row-lists returned on successive polls."""
+    rows = [(2, "https://www.youtube.com/watch?v=1")] if rows is None else rows
+    said, seen = [], iter(sheets)
     saved = {n: getattr(m, n) for n in ("_smoke_push", "_smoke_schedule_rows",
                                         "SMOKE_READBACK_S")}
-    m._smoke_push = lambda url, row, value: (False, "HTTP Error 500: boom")
-    m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"], ["", "A"]]
+    last = [sheets[-1]]
+    m._smoke_push = pushes
+    m._smoke_schedule_rows = lambda sheet_id: next(seen, last[0])
+    # 0 s: each phase gets exactly one poll — the deadline is checked AFTER the
+    # match attempt, so the loop never reaches its sleep. Keeps the suite fast.
     m.SMOKE_READBACK_S = 0
     try:
-        ok, note = m._smoke_write_schedule("https://example.invalid/w", "sheet",
-                                           [(2, "https://www.youtube.com/watch?v=1")],
-                                           [2], lambda _m: None)
+        return m._smoke_write_schedule("https://example.invalid/w", "sheet",
+                                       rows, list(clear), said.append), said
     finally:
         for n, fn in saved.items():
             setattr(m, n, fn)
+
+
+def t_smoke_write_schedule_confirms_the_clear_then_the_write():
+    """Two confirmations, not one: the cleared rows must come back EMPTY before
+    the write, then every row must carry ITS url."""
+    sheets = [[["URL", "Streamer"], ["", "A"]],                       # cleared
+              [["URL", "Streamer"], ["https://www.youtube.com/watch?v=1", "A"]]]
+    (ok, note, notes), said = _write_schedule(lambda u, r, v: (True, ""), sheets)
+    assert ok, note
+    assert notes == []
+    assert any("cleared rows confirmed empty" in line for line in said), said
+
+
+def t_smoke_write_schedule_survives_a_push_that_reported_an_error():
+    """The webhook's HTTP result is not proof; the sheet is. A reported failure
+    must not abort when the sheet ends up right — and it is NOT retried."""
+    sheets = [[["URL", "Streamer"], ["", "A"]],
+              [["URL", "Streamer"], ["https://www.youtube.com/watch?v=1", "A"]]]
+    (ok, _note, notes), said = _write_schedule(
+        lambda u, r, v: (False, "HTTP 404"), sheets)
+    assert ok
+    assert notes and any("write row 2" in n for n in notes), notes
+    assert any("a push had reported an error" in line for line in said), said
+
+
+def t_smoke_write_schedule_fails_when_nothing_changed():
+    """The hole a plain `want <= got` left open: a repeat run against a DEAD
+    webhook wants the URLs the previous run already wrote, so an end-state check
+    passes while nothing was written. Confirming the CLEAR first closes it."""
+    unchanged = [["URL", "Streamer"], ["https://www.youtube.com/watch?v=1", "A"]]
+    (ok, note, _notes), _said = _write_schedule(
+        lambda u, r, v: (False, "HTTP 404"), [unchanged])
     assert not ok
-    assert "500" in note and "write row 2" in note, note
+    assert "cleared" in note and "HTTP 404" in note, note
+
+
+def t_smoke_write_schedule_fails_when_a_url_lands_in_the_wrong_row():
+    """Per row, not set inclusion: the right URL in the wrong row is not a pass."""
+    sheets = [[["URL", "S"], ["", "A"], ["", "B"]],
+              [["URL", "S"], ["", "A"], ["https://www.youtube.com/watch?v=1", "B"]]]
+    (ok, note, _n), _said = _write_schedule(lambda u, r, v: (True, ""), sheets,
+                                            clear=(2, 3),
+                                            rows=[(2, "https://www.youtube.com/watch?v=1")])
+    assert not ok and "written" in note, note
+
+
+def t_smoke_push_never_reports_the_webhook_url():
+    """http.client.InvalidURL carries the whole Apps Script path — the sheet's
+    write capability — and does NOT inherit from ValueError, so it slipped past
+    the JSON guard into stdout, --json and the history file."""
+    import http.client
+
+    class _Bad(_StubHttp):
+        def post_json(self, url, obj, *, headers=None, timeout=None):
+            raise http.client.InvalidURL(
+                "URL can't contain control characters. "
+                "'/macros/s/AKfycbSECRETID12345/ex ec' (found at least ' ')")
+
+    ok, note = _with_stub_http(_Bad(),
+                               lambda: m._smoke_push("https://example.invalid/w", 2, "u"))
+    assert not ok
+    assert "AKfycb" not in note and "macros" not in note, note
+    assert note == "InvalidURL", note
 
 
 def t_smoke_relay_post_returns_a_parsed_reply():
@@ -4583,7 +4626,7 @@ def t_smoketest_tears_down_even_when_event_start_aborts():
     m._smoke_js_runtime = lambda url: "deno-x"
     m._smoke_schedule_rows = lambda sheet_id: [["URL", "Streamer"], ["a", "b"],
                                                ["c", "d"], ["e", "f"]]
-    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_write_schedule = lambda *a, **k: (True, "", [])
     m._smoke_append_history = lambda entry: calls.append("history")
 
     def _boom(rest):
@@ -4640,7 +4683,7 @@ def t_smoketest_runs_the_rundown_when_event_start_exits_zero():
                                                ["https://www.youtube.com/watch?v=o", "A"],
                                                ["https://www.twitch.tv/o", "B"],
                                                ["https://youtu.be/o", "C"]]
-    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_write_schedule = lambda *a, **k: (True, "", [])
     m._smoke_append_history = lambda entry: None
     m.event_start = lambda rest: (_ for _ in ()).throw(SystemExit(0))
     m.event_stop = lambda rest: calls.append("stop")
@@ -4689,7 +4732,7 @@ def t_smoketest_teardown_failure_reaches_the_verdict():
                                                ["https://www.youtube.com/watch?v=o", "A"],
                                                ["https://www.twitch.tv/o", "B"],
                                                ["https://youtu.be/o", "C"]]
-    m._smoke_write_schedule = lambda *a, **k: (True, "")
+    m._smoke_write_schedule = lambda *a, **k: (True, "", [])
     m._smoke_append_history = lambda entry: seen.update(entry=entry)
     m.event_start = lambda rest: None
     m._smoke_rundown = lambda say: []

@@ -6999,20 +6999,26 @@ def _smoke_push(push_url, row, url):
     Script answers through a redirect whose target 404s intermittently AFTER the
     script has already run — observed on the box with the URL sitting in the
     sheet afterwards. So callers must not treat a reported failure as proof that
-    nothing was written; `_smoke_write_schedule` reads the sheet back instead.
-    Column A ONLY — Streamer and Stint are never
-    sent, mirroring the panel's CLEAR URL button ("keep Streamer + Stint so the
-    slot survives"). Those fields are vocabulary-constrained against the
-    Configuration tab, so a discovered channel name is not a legal value there."""
+    nothing was written; `_smoke_write_schedule` confirms against the sheet.
+
+    Writes the URL column ONLY — Streamer and Stint are never sent, mirroring the
+    panel's CLEAR URL button ("keep Streamer + Stint so the slot survives").
+    Those fields are vocabulary-constrained against the Configuration tab, so a
+    discovered channel name is not a legal value there."""
     try:
         body = _smoke_post_json(push_url, {"action": "schedule", "row": int(row),
                                            "url": url}, timeout=30)
+    except http_util.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
     except ValueError:
         # A Google error page instead of JSON: its body can carry script ids and
         # would land in stdout, --json and the history file. Report the shape.
         return False, "webhook did not answer with JSON"
     except Exception as exc:                     # noqa: BLE001 — reported, not raised
-        return False, str(exc)[:160]
+        # The CLASS only, never str(exc): http.client.InvalidURL puts the whole
+        # Apps Script path — the sheet's write capability — into its message, and
+        # it does not inherit from ValueError, so the guard above misses it.
+        return False, type(exc).__name__
     if isinstance(body, dict) and body.get("ok"):
         return True, ""
     note = (body or {}).get("error") if isinstance(body, dict) else None
@@ -7027,43 +7033,71 @@ def _smoke_schedule_rows(sheet_id):
     return list(csv.reader(io.StringIO(body.decode("utf-8", "replace"))))
 
 
-def _smoke_write_schedule(push_url, sheet_id, rows, clear, say):
-    """Clear column A, write the discovered URLs, then read back until the sheet
-    serves them. Clearing first is what makes the read-back conclusive: a stale
-    CSV then still shows an OLD url, which is unambiguous. A timeout is a hard
-    abort — silently testing the previous rows is worse than not testing."""
+def _smoke_await_rows(sheet_id, expected, what):
+    """Poll the Schedule tab until it serves EXACTLY `expected` ({row: url}).
+
+    Returns (ok, note). Used twice: once after clearing (every target row must
+    read back EMPTY) and once after writing (every row must carry ITS url). The
+    cleared-then-written transition is the point — a single end-state check
+    cannot tell a successful write from a sheet that already happened to hold
+    those URLs, which is what a repeat run against a dead webhook looks like.
+    """
     sm = _sm()
+    deadline = time.time() + SMOKE_READBACK_S
+    while True:
+        try:
+            served = sm.schedule_urls(_smoke_schedule_rows(sheet_id))
+            if sm.rows_match(served, expected):
+                return True, ""
+        except Exception:                        # noqa: BLE001 — transient, keep polling
+            pass
+        if time.time() >= deadline:
+            return False, (f"the sheet did not serve the {what} rows after "
+                           f"{SMOKE_READBACK_S}s")
+        time.sleep(5)
+
+
+def _smoke_write_schedule(push_url, sheet_id, rows, clear, say):
+    """Clear the URL column, write the discovered URLs, and CONFIRM both against
+    the sheet itself.
+
+    A reported push failure never aborts: the webhook's HTTP result does not say
+    whether the write happened (Apps Script answers through a redirect that 404s
+    intermittently after the script has run). The sheet is the authority, and it
+    is read twice — the cleared rows must come back empty before the write, and
+    afterwards every row must carry its own URL. Anything less would let a run
+    that changed nothing at all look successful.
+
+    Either confirmation timing out is a hard abort: silently testing whatever the
+    previous run left behind is worse than not testing.
+    """
     push_notes = []
     for row in clear:
         ok, note = _smoke_push(push_url, row, "")
         if not ok:
-            # NOT fatal, and deliberately not retried: the webhook's HTTP result
-            # does not tell us whether the write happened. Clearing only exists
-            # to make the read-back unambiguous, and the read-back is what
-            # decides. A reported error is kept as diagnostic detail.
+            # Kept as diagnostic detail, deliberately not retried — the
+            # confirmation below decides whether it actually mattered.
             push_notes.append(f"clear row {row}: {note}")
-            say(f"  clearing row {row} reported {note} — the read-back decides")
+            say(f"  clearing row {row} reported {note!r} — the sheet decides")
+    ok, note = _smoke_await_rows(sheet_id, {row: "" for row in clear}, "cleared")
+    if not ok:
+        return False, _smoke_note_with(note, push_notes), push_notes
+    say("  cleared rows confirmed empty")
     for row, url in rows:
         ok, note = _smoke_push(push_url, row, url)
         if not ok:
             push_notes.append(f"write row {row}: {note}")
-            say(f"  write of row {row} reported {note} — the read-back decides")
-    want = {url for _row, url in rows}
-    deadline = time.time() + SMOKE_READBACK_S
-    while time.time() < deadline:
-        try:
-            served = sm.schedule_urls(_smoke_schedule_rows(sheet_id))
-            got = {u for u in served.values() if u}
-        except Exception:                        # noqa: BLE001 — transient, keep polling
-            got = set()
-        if want <= got:
-            say("  schedule read back OK"
-                + (" (a write had reported an error)" if push_notes else ""))
-            return True, ""
-        time.sleep(5)
-    return False, (f"the sheet still does not serve the new URLs after "
-                   f"{SMOKE_READBACK_S}s — refusing to test the previous rows"
-                   + (f" ({'; '.join(push_notes)})" if push_notes else ""))
+            say(f"  write of row {row} reported {note!r} — the sheet decides")
+    ok, note = _smoke_await_rows(sheet_id, dict(rows), "written")
+    if not ok:
+        return False, _smoke_note_with(note, push_notes), push_notes
+    say("  schedule read back OK"
+        + (" (a push had reported an error)" if push_notes else ""))
+    return True, "", push_notes
+
+
+def _smoke_note_with(note, push_notes):
+    return note + (f" ({'; '.join(push_notes)})" if push_notes else "")
 
 
 def _smoke_error_payload(exc):
@@ -7420,13 +7454,19 @@ def smoketest_cmd(rest):
         say("  previous URLs (kept only in the history file):")
         for row in sorted(cleared):
             say(f"    row {row}: {cleared[row]}")
-    ok, note = _smoke_write_schedule(push_url, sheet_id, rows, clearing, say)
+    ok, note, push_notes = _smoke_write_schedule(push_url, sheet_id, rows,
+                                                 clearing, say)
     if not ok:
         results.append(sm.Result("sheet_write", sm.FAIL, note))
         return _smoke_finish(results, tools, sources, minutes, as_json, lines, cleared)
+    # The push errors belong in the RESULT, not only in say(): say() is silent
+    # under --json, so a machine-readable run would never learn that the webhook
+    # complained while the sheet came out right.
     results.append(sm.Result("sheet_write", sm.PASS,
                              "URL column only, rows "
-                             + ", ".join(str(r) for r, _u in rows)))
+                             + ", ".join(str(r) for r, _u in rows)
+                             + (f"; pushes reported: {'; '.join(push_notes)}"
+                                if push_notes else "")))
 
     try:
         import tailscale as _ts

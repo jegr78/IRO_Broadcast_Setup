@@ -269,6 +269,19 @@ def schedule_urls(rows):
     return out
 
 
+def rows_match(served, expected):
+    """True when the sheet serves EXACTLY `expected` ({physical_row: url}) in the
+    rows it names. `served` is `schedule_urls()` output.
+
+    Per row, not set inclusion: `want <= got` over all rows answered "are these
+    URLs somewhere in the tab", which a repeat run against a DEAD webhook passes
+    without anything having been written — the previous run's identical URLs are
+    still sitting there. Checking the row a value was written to, and checking
+    the cleared rows are really empty, is what makes the transition observable.
+    """
+    return all((served.get(row) or "") == (url or "") for row, url in expected.items())
+
+
 def plan_rows(youtube_urls, twitch_urls, data_rows):
     """[(physical_row, url), …] for SOURCE_PLAN, or None when a slot or a sheet
     row is missing — a short sheet must abort, never silently write fewer."""
