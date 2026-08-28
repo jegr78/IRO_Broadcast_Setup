@@ -3297,6 +3297,8 @@ def _http_url(host, port, path):
 # The URL openers we will spawn ourselves, in preference order. `gio` takes the
 # URL after an `open` verb; the others take it directly.
 URL_OPENERS = ("xdg-open", "gio", "kde-open", "gnome-open")
+URL_OPENER_SCHEMES = ("http://", "https://")
+URL_OPENER_GRACE_S = 1.5      # long enough to catch a dynamic-linker death
 
 
 def url_opener_argv(platform, url, which=shutil.which):
@@ -3311,9 +3313,14 @@ def url_opener_argv(platform, url, which=shutil.which):
     sends the child's stderr to devnull so nothing says why. Spawning the opener
     ourselves is what lets us hand it a de-PyInstaller environment.
 
-    Windows has no library-path problem, so it returns None and keeps
-    `webbrowser` — as does a box with none of these openers installed.
+    Only ever for a real http(s) URL: `open` and `gio open` launch a FILE with
+    its default application, so a caller handing over a path — or a `-`-leading
+    string an opener would read as a flag — must never reach them. Windows has
+    no library-path problem, so it returns None and keeps `webbrowser`, as does
+    a box with none of these openers installed.
     """
+    if not url.startswith(URL_OPENER_SCHEMES):
+        return None
     if platform.startswith("win"):
         return None
     if platform == "darwin":
@@ -3321,28 +3328,61 @@ def url_opener_argv(platform, url, which=shutil.which):
     for tool in URL_OPENERS:
         path = which(tool)
         if path:
-            return [path, "open", url] if tool == "gio" else [path, url]
+            # `--` ends option parsing before the URL, as CPython's webbrowser does.
+            return [path, "open", "--", url] if tool == "gio" else [path, url]
     return None
 
 
-def _open_url(url, which=shutil.which, platform=None, popen=None, browser=None):
-    """Open `url` in the producer's browser. `which`/`platform`/`popen`/`browser`
-    are test seams (same pattern as `_gui_spawn`), so a unit test never has to
-    patch the stdlib modules this reaches for."""
+def _spawn_url_opener(argv, env, popen=None, sleep=None):
+    """Run the URL opener; return its complaint, or "" when it worked.
+
+    NOT `_gui_spawn`, deliberately. That helper reads "gone after the grace
+    period" as death, which is right for a GUI app and wrong here: a URL opener
+    HANDS THE URL OVER AND EXITS, so every success would be reported as a death
+    and would trigger a second browser. The exit CODE is the signal instead.
+
+    stderr is captured for the same reason `_gui_spawn` captures it — a silent
+    dynamic-linker death on stderr=DEVNULL is exactly what kept #572 invisible,
+    and this function exists because of that bug. Raises OSError like Popen.
+    """
+    popen = subprocess.Popen if popen is None else popen
+    sleep = time.sleep if sleep is None else sleep
+    with tempfile.TemporaryFile() as fh:
+        proc = popen(argv, env=env, stdout=subprocess.DEVNULL, stderr=fh,
+                     **sv.spawn_kwargs(os.name))
+        sleep(URL_OPENER_GRACE_S)
+        rc = None if proc is None else proc.poll()
+        if rc in (None, 0):
+            return ""              # still running, or handed the URL over cleanly
+        fh.seek(0)
+        text = fh.read().decode("utf-8", "replace")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()][:3]
+    return " / ".join(lines)[:400] or f"exit {rc}"
+
+
+def _open_url(url, which=shutil.which, platform=None, popen=None, sleep=None,
+              browser=None):
+    """Open `url` in the producer's browser. `which`/`platform`/`popen`/`sleep`/
+    `browser` are test seams (the `_gui_spawn` pattern), so a unit test never has
+    to patch the stdlib modules this reaches for."""
     print(f"Opening {url}")
     env = sv.external_tool_env()            # None off the frozen binary
     plat = sys.platform if platform is None else platform
     argv = url_opener_argv(plat, url, which=which) if env is not None else None
     if argv is not None:
         try:
-            # Detached: the browser must outlive the CLI that opened it.
-            (popen or subprocess.Popen)(
-                argv, env=env, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True)
-            return
+            note = _spawn_url_opener(argv, env, popen=popen, sleep=sleep)
         except OSError as exc:
-            print(f"  {argv[0]} failed ({exc}) — trying the default browser")
+            note = str(exc)
+        if not note:
+            return
+        print(f"  {argv[0]}: {note}")
+        # Last resort only. webbrowser starts the browser as OUR child, which is
+        # the very thing that fails on a frozen build — so promise nothing.
+        print(f"  falling back to the default browser — if no window appears, "
+              f"open {url} yourself")
     (browser or webbrowser.open)(url)
+
 
 def relay_open_panel(rest):
     _open_url(_http_url("127.0.0.1", RELAY_PORT, "/panel"))
