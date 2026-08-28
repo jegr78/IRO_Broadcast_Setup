@@ -3723,6 +3723,24 @@ def tailscale_status_cmd(_rest):
     _append_tailscale_snapshot()
 
 
+OBS_READY_TIMEOUT_S = 30      # OBS loading a big scene collection is not quick
+
+
+def _wait_for_obs_ready(timeout=OBS_READY_TIMEOUT_S):
+    """Give a just-launched OBS time to answer obs-websocket. Best effort: a
+    timeout is a note, never a blocked bring-up (OBS may simply not be there)."""
+    try:
+        import obs_ws
+        ok, note = obs_ws.wait_until_ready(timeout=timeout)
+    except Exception as exc:                         # noqa: BLE001 — best effort
+        print(f"obs: readiness check skipped ({exc}).")
+        return
+    if not ok:
+        print(f"obs: not answering obs-websocket after {timeout:.0f}s — "
+              f"the scene collection, page refresh and Standby switch may be "
+              f"skipped ({note}).")
+
+
 def _check_scene_collection():
     """At `event start`, align OBS's scene collection with the active profile.
     Default-on auto-switch (RACECAST_OBS_COLLECTION_SWITCH=0 -> warn-only, the old
@@ -3884,6 +3902,11 @@ def event_start(rest, _autojoin=True, _new_session=True):
     # page bytes are unchanged must still clear OBS's cached browser sources,
     # otherwise stale HUD/overlay pages survive the bring-up. Also guarantees
     # _sync_pov_transform runs (it is nested inside the refresh).
+    # OBS accepts the WebSocket several seconds before it can answer a request
+    # (obs-websocket replies 207 "not ready" meanwhile). Running the three steps
+    # below inside that window skips all three silently — which is exactly what
+    # happened once launching OBS actually started working (#572).
+    _wait_for_obs_ready()
     _check_scene_collection()
     _refresh_obs_pages(force=True)
     _switch_to_standby()          # park OBS on Standby, ready to Start Streaming
