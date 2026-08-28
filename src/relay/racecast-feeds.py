@@ -3508,6 +3508,104 @@ def program_audio_ffmpeg_cmd():
             "-f", PROGRAM_AUDIO_FORMAT, "pipe:1"]
 
 
+# #576: a Twitch feed can be fMP4/CMAF rather than MPEG-TS. TS carries its own
+# resync marker (the 0x47 sync byte), so a consumer joining mid-stream recovers on
+# its own — that is what makes the opaque fan-out tee work. fMP4 does not: the
+# codec parameters live once, in the `moov` of the initialization segment at the
+# very start of the stream, and a join lands inside an `mdat` where nothing is
+# parseable. Measured against a live Twitch capture, only the init segment PLUS a
+# `moof`-aligned join produced MP3 frames; either half alone produced none.
+FEED_HEAD_BYTES = 64 * 1024              # ample for ftyp+moov on every CMAF stream seen
+FMP4_ALIGN_SCAN_BYTES = 4 * 1024 * 1024  # search budget, then pass through raw
+FMP4_MAX_BOX_BYTES = 1024 * 1024         # a moof is ~1-2 KB; this is a sanity bound
+# Top-level box types a validated `moof` candidate may be followed by.
+FMP4_BOX_TYPES = frozenset((b"moof", b"mdat", b"styp", b"sidx", b"prft", b"emsg",
+                            b"ftyp", b"moov", b"free", b"skip", b"mfra", b"ssix"))
+
+
+def _iter_boxes(d):
+    """(offset, size, type) for the top-level ISO-BMFF boxes in `d`, stopping at
+    the first entry that is not a well-formed box header. Only valid from a real
+    box boundary — see `fmp4_fragment_start` for the mid-stream case."""
+    i = 0
+    while i + 8 <= len(d):
+        size = int.from_bytes(d[i:i + 4], "big")
+        typ = bytes(d[i + 4:i + 8])
+        if size == 1:                    # 64-bit largesize
+            if i + 16 > len(d):
+                return
+            size = int.from_bytes(d[i + 8:i + 16], "big")
+        if size < 8:
+            return
+        yield i, size, typ
+        i += size
+
+
+def fmp4_init_segment(head):
+    """The fMP4 initialization segment (`ftyp`…`moov`) from the retained head of a
+    feed, or b"" when the head is not fMP4 — so an MPEG-TS feed keeps today's raw
+    path byte for byte.
+
+    Completes at the end of `moov` rather than waiting for the first `moof`: the
+    head can be captured before a fragment has arrived, and a truncated `moov`
+    is worse than none (it hands ffmpeg a broken header), so that returns b"".
+    """
+    head = bytes(head or b"")
+    first = next(_iter_boxes(head), None)
+    if not first or first[2] != b"ftyp":
+        return b""
+    for off, size, typ in _iter_boxes(head):
+        if typ == b"moof":
+            return head[:off]            # complete: everything before the fragment
+        if typ == b"moov":
+            end = off + size
+            return head[:end] if end <= len(head) else b""
+    return b""
+
+
+def fmp4_fragment_start(buf, start=0):
+    """Offset of the first top-level `moof` box at or after `start`, or None.
+
+    A VALIDATED PATTERN SEARCH, not a box walk: a mid-stream join lands inside an
+    `mdat`, where box sizes are meaningless, so there is no boundary to walk from.
+    A candidate qualifies when the four bytes before the `moof` tag are a
+    plausible box size AND the box that size points at carries a known type —
+    media payload happening to contain the bytes "moof" fails that. A candidate
+    that cannot be validated yet reads as "not found", so the caller keeps
+    buffering instead of committing to a guess."""
+    data = bytes(buf)
+    i = data.find(b"moof", max(start + 4, 4))
+    while i != -1:
+        off = i - 4
+        size = int.from_bytes(data[off:i], "big")
+        if 8 < size <= FMP4_MAX_BOX_BYTES:
+            nxt = off + size
+            if nxt + 8 > len(data):
+                return None              # not enough held to validate — read more
+            if bytes(data[nxt + 4:nxt + 8]) in FMP4_BOX_TYPES:
+                return off
+        i = data.find(b"moof", i + 1)
+    return None
+
+
+def fmp4_aligned_take(pending):
+    """(write_now, still_pending) while aligning a joined fMP4 stream to its first
+    fragment boundary. b"" and the buffer while still searching; the aligned
+    payload and None once found — or, once the search budget is spent, the buffer
+    unchanged, degrading to today's raw pass-through rather than stalling.
+
+    That give-up path leaves ffmpeg alive but silent (it accepts the unaligned
+    fMP4 and emits nothing) where the unfixed code had it die and respawn every
+    two seconds. Same end state — no audio — at less cost; worth knowing before
+    reading "encoder up, output ring empty" as a different bug."""
+    at = fmp4_fragment_start(pending)
+    if at is not None:
+        return bytes(pending[at:]), None
+    if len(pending) >= FMP4_ALIGN_SCAN_BYTES:
+        return bytes(pending), None
+    return b"", pending
+
+
 def should_retarget(prev_live, cur_live, serving):
     """The program-audio encoder should re-point (restart ffmpeg on the new
     feed's ring) only when the on-air feed changed AND the new feed is actually
@@ -3870,6 +3968,7 @@ class FeedRing:
     def __init__(self, capacity):
         self.capacity = capacity
         self._buf = bytearray()
+        self._head = bytearray()       # #576: the stream's first bytes, never evicted
         self._base = 0                 # absolute offset of self._buf[0]
         self._marks = collections.deque()   # #533: (live_offset, monotonic_ts) samples, throttled+pruned
         self._cond = threading.Condition()
@@ -3879,6 +3978,8 @@ class FeedRing:
         if not data:
             return
         with self._cond:
+            if len(self._head) < FEED_HEAD_BYTES:
+                self._head += data[:FEED_HEAD_BYTES - len(self._head)]
             self._buf += data
             overflow = len(self._buf) - self.capacity
             if overflow > 0:
@@ -3898,6 +3999,21 @@ class FeedRing:
             self._marks.append((live, now))
         while self._marks and self._marks[0][0] <= self._base:
             self._marks.popleft()
+
+    def head(self):
+        """The retained first bytes of the CURRENT upstream stream (#576) — the
+        fMP4 initialization segment lives here and nowhere else."""
+        with self._cond:
+            return bytes(self._head)
+
+    def reset_head(self):
+        """Drop the retained head: the writer is starting a NEW upstream process
+        (stint advance, reconnect), whose initialization segment differs. The ring
+        is created once in `Relay.start()` and outlives every streamlink process,
+        so without this a later consumer is handed the previous stream's codec
+        parameters."""
+        with self._cond:
+            self._head = bytearray()
 
     def live_offset(self):
         with self._cond:
@@ -4311,10 +4427,22 @@ class ProgramAudioService:
         *proc* is the process this thread owns — checked instead of the shared
         self._proc, which a handover reassigns to the NEXT generation."""
         cursor = self._join_offset(ring, time.monotonic())   # #533: match OBS's trailing join
+        # #576: on an fMP4/CMAF feed the codec parameters exist only in the init
+        # segment at the head of the stream, and the join lands inside an mdat.
+        # Send the init segment first, then skip to the first fragment boundary.
+        # A TS feed yields b"" here and takes the raw path unchanged.
+        head = ring.head() if hasattr(ring, "head") else b""
+        init = fmp4_init_segment(head)
+        pending = bytearray() if init else None
         try:
+            if init:
+                stdin.write(init); stdin.flush()
             while not self._stop.is_set() and not getattr(ring, "closed", False):
                 data, cursor = fanout_capped_read(
                     ring, cursor, getattr(self.relay, "feed_prebuffer_s", 0.0))
+                if data and pending is not None:
+                    pending += data
+                    data, pending = fmp4_aligned_take(pending)
                 if data:
                     stdin.write(data); stdin.flush()
                 if proc is None or proc.poll() is not None:
@@ -6037,6 +6165,8 @@ class Feed:
         self._set_phase("serving")
         self._clear_drop_health()
         self.last_byte_ts = None
+        if self.ring is not None:
+            self.ring.reset_head()     # #576: a new upstream = a new init segment
         serve_started = time.monotonic()
         stdout = self.proc.stdout
         stall_s = feed_stall_s(os.environ)

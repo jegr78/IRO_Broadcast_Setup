@@ -53,9 +53,43 @@ served by the relay, mirroring the existing fan-out / preview architecture:
 
 ```
 on-air feed's FeedRing  ──►  stdin-pump  ──►  ffmpeg (audio-only → MP3)  ──►  output FeedRing  ──►  HTTP serving loop  ──►  <audio> in browser
-     (raw MPEG-TS)                              PROGRAM_AUDIO_FFMPEG_*                                (wfile.write loop)
+  (raw MPEG-TS or fMP4)                         PROGRAM_AUDIO_FFMPEG_*                                (wfile.write loop)
                                                                                                      N listeners share one encoder
 ```
+
+### Container variance: the join has to be made decodable (#576)
+
+The tap joins the on-air feed's ring mid-stream. For **MPEG-TS** that is enough —
+the 0x47 sync byte lets ffmpeg resync forward, which is the assumption the whole
+opaque fan-out tee rests on. A **Twitch feed can be fMP4/CMAF instead**, and there
+the codec parameters exist exactly once, in the `moov` of the initialization
+segment at the head of the stream; a join lands inside an `mdat` with nothing
+parseable in sight. ffmpeg then misprobes (observed: `m4v`, `lrc`), reports
+`Invalid data found when processing input`, and produces no MP3 at all — the
+failure `racecast smoketest` caught as `[FAIL] program_audio — timed out`.
+
+Measured against a captured live Twitch stream, feeding the production ffmpeg
+argv: a naked mid-stream cut yields **0 MP3 bytes**; the init segment alone yields
+**0** (`Output file is empty`); a `moof`-aligned cut without the init segment
+yields **0** (`could not find corresponding trex`); init segment **plus** aligned
+cut yields **4542 bytes**. Both halves are required.
+
+So `FeedRing` retains a bounded head of the current upstream stream
+(`FEED_HEAD_BYTES`, `head()`), and `_feed_stdin` sends `fmp4_init_segment(head)`
+before skipping forward to the first fragment boundary
+(`fmp4_fragment_start` / `fmp4_aligned_take`). The head is **reset whenever the
+writer starts a new streamlink process** — the ring is created once in
+`Relay.start()` and outlives every stint advance and reconnect, so a stale init
+segment would carry the previous stream's codec parameters.
+
+A TS feed yields an empty init segment and takes the raw path byte for byte, and
+a search that runs past `FMP4_ALIGN_SCAN_BYTES` degrades to that same raw
+pass-through rather than stalling. Alignment cannot be a box walk — a mid-`mdat`
+join has no boundary to walk from — so it is a validated pattern search for
+`moof`: a plausible box size, and a known box type where that size lands.
+
+The same variance on the **OBS serving path** is open as a separate question
+(fan-out spec risk R2); this design deliberately changes only the audio tap.
 
 ### Prior art this builds on (`src/relay/racecast-feeds.py`)
 

@@ -313,6 +313,160 @@ def t_program_audio_join_offset_defaults_when_relay_lacks_attr():
     assert svc._join_offset(r, now=5.0) == 500   # getattr default 0.0 -> live edge
 
 
+# --- fMP4/CMAF joins (#576) --------------------------------------------------
+# A Twitch feed can be fMP4/CMAF rather than MPEG-TS. A mid-stream join then
+# lands inside an `mdat` with no ftyp/moov, so ffmpeg has no codec parameters and
+# cannot resync — measured against a live capture, only the initialization
+# segment PLUS a moof-aligned join produced MP3 frames.
+
+def _box(typ, payload=b""):
+    return (8 + len(payload)).to_bytes(4, "big") + typ + payload
+
+
+_FTYP = _box(b"ftyp", b"mp42" + b"\x00" * 8)
+_MOOV = _box(b"moov", b"\x11" * 200)
+_INIT = _FTYP + _MOOV
+
+
+def _fragment(payload):
+    return _box(b"moof", b"\x22" * 60) + _box(b"mdat", payload)
+
+
+def t_fmp4_init_segment_ends_after_moov():
+    head = _INIT + _fragment(b"\x33" * 400)
+    assert m.fmp4_init_segment(head) == _INIT
+
+
+def t_fmp4_init_segment_without_a_fragment_yet():
+    """The head can be captured before the first moof arrives — the init segment
+    is complete at the end of moov and must not wait for one."""
+    assert m.fmp4_init_segment(_INIT) == _INIT
+
+
+def t_fmp4_init_segment_refuses_a_truncated_moov():
+    """Half a moov is worse than none: it would hand ffmpeg a broken header."""
+    assert m.fmp4_init_segment(_INIT[:-50]) == b""
+
+
+def t_fmp4_init_segment_is_empty_for_mpeg_ts():
+    """The TS path must stay byte-identical to today — no prefix, no alignment."""
+    ts = b"".join(b"\x47" + bytes([i % 251]) * 187 for i in range(20))
+    assert m.fmp4_init_segment(ts) == b""
+    assert m.fmp4_init_segment(b"") == b""
+    assert m.fmp4_init_segment(None) == b""
+
+
+def t_fmp4_fragment_start_finds_the_first_moof():
+    stream = _INIT + _fragment(b"\x33" * 400) + _fragment(b"\x44" * 400)
+    at = m.fmp4_fragment_start(stream)
+    assert at == len(_INIT)
+    assert stream[at + 4:at + 8] == b"moof"
+
+
+def t_fmp4_fragment_start_skips_a_moof_inside_mdat_payload():
+    """The search is a validated pattern scan, not a box walk — a mid-stream join
+    lands inside an mdat where sizes are meaningless. Media payload containing
+    the four bytes 'moof' must not be mistaken for a box start."""
+    decoy = b"\x00\x00\x00\x40" + b"moof" + b"\x55" * 300
+    stream = _fragment(decoy) + _fragment(b"\x66" * 400)
+    at = m.fmp4_fragment_start(stream)
+    assert at == 0                                   # the REAL first moof
+    at2 = m.fmp4_fragment_start(stream, start=8)     # past it: the decoy is skipped
+    assert at2 == len(_fragment(decoy))
+
+
+def t_fmp4_fragment_start_waits_for_enough_bytes_to_validate():
+    """A candidate that cannot be validated yet is 'not found' — the caller keeps
+    buffering rather than committing to a guess."""
+    stream = _INIT + _box(b"moof", b"\x22" * 60)
+    assert m.fmp4_fragment_start(stream) is None
+
+
+def t_fmp4_aligned_take_holds_until_a_boundary():
+    buf = bytearray(b"\x99" * 100)
+    data, pending = m.fmp4_aligned_take(buf)
+    assert data == b"" and pending is buf             # still searching
+    buf += _fragment(b"\x33" * 400)
+    data, pending = m.fmp4_aligned_take(buf)
+    assert pending is None
+    assert data[4:8] == b"moof"                       # the leading garbage is dropped
+
+
+def t_fmp4_aligned_take_gives_up_and_passes_through():
+    """Budget spent: degrade to today's raw behaviour rather than stall forever."""
+    buf = bytearray(b"\x99" * (m.FMP4_ALIGN_SCAN_BYTES + 1))
+    data, pending = m.fmp4_aligned_take(buf)
+    assert pending is None and data == bytes(buf)
+
+
+def t_feed_ring_keeps_and_resets_the_stream_head():
+    """The ring is created ONCE in Relay.start() and outlives every streamlink
+    process, so the head must be dropped when the writer starts a new one —
+    otherwise the next stream is served the previous stream's init segment."""
+    r = m.FeedRing(1024)                      # smaller than the head budget
+    r.write(_INIT)
+    r.write(b"\x77" * 4096)                    # scrolls the ring, not the head
+    assert r.head().startswith(_INIT)
+    assert m.fmp4_init_segment(r.head()) == _INIT
+    r.reset_head()
+    assert r.head() == b""
+    r.write(b"\x47" * 400)
+    assert m.fmp4_init_segment(r.head()) == b""
+
+
+def t_feed_ring_head_is_bounded():
+    r = m.FeedRing(1024)
+    r.write(b"z" * (m.FEED_HEAD_BYTES + 5000))
+    assert len(r.head()) == m.FEED_HEAD_BYTES
+
+
+def t_program_audio_prepends_the_init_segment_for_fmp4():
+    """End to end through the real pump: what reaches ffmpeg's stdin must start
+    with ftyp/moov and continue at a moof box, never mid-mdat."""
+    frag1 = _fragment(b"\x33" * 400)
+    frag2 = _fragment(b"\x44" * 400)
+    ring = m.FeedRing(1_000_000)
+    ring.write(_INIT + frag1 + frag2)
+    written = io.BytesIO()
+
+    class _Stdin:
+        def write(self, b): written.write(b)
+        def flush(self): pass
+        def close(self): pass
+
+    class FakeRelay:
+        feed_prebuffer_s = 0.0
+
+    svc = m.ProgramAudioService(FakeRelay(), logging.getLogger("t576"))
+    # Join mid-mdat, the way a live consumer does. proc=None ends the pump after
+    # the first read, so the assertion sees exactly one join.
+    svc._join_offset = lambda r, now: len(_INIT) + 20
+    svc._feed_stdin(_Stdin(), ring, proc=None)
+    out = written.getvalue()
+    assert out == _INIT + frag2, (out[:40], len(out))
+
+
+def t_program_audio_leaves_mpeg_ts_untouched():
+    """The TS path must stay byte-identical: no prefix, no alignment, no delay."""
+    ts = b"".join(b"\x47" + bytes([i % 251]) * 187 for i in range(20))
+    ring = m.FeedRing(1_000_000)
+    ring.write(ts)
+    written = io.BytesIO()
+
+    class _Stdin:
+        def write(self, b): written.write(b)
+        def flush(self): pass
+        def close(self): pass
+
+    class FakeRelay:
+        feed_prebuffer_s = 0.0
+
+    svc = m.ProgramAudioService(FakeRelay(), logging.getLogger("t576ts"))
+    svc._join_offset = lambda r, now: 0
+    svc._feed_stdin(_Stdin(), ring, proc=None)
+    assert written.getvalue() == ts
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("t_") and callable(fn):
