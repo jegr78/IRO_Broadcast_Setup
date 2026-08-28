@@ -4805,6 +4805,8 @@ def t_smoketest_runs_the_rundown_when_event_start_exits_zero():
         try:
             m.smoketest_cmd(["--json", "--minutes", "1"])
         except SystemExit:
+            # The command exits through SystemExit by design; this test asserts
+            # on the teardown it ran on the way out, not on the exit code.
             pass
     finally:
         for name, fn in saved.items():
